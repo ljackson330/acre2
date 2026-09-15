@@ -23,3 +23,7 @@ Thumbs.db
 *.out
 *.zip
 *.sqfc
+
+# mingw cross-compilation output
+/build-mingw/
+/extensions/build/

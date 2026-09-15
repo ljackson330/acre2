@@ -34,7 +34,7 @@
 
 
 #define DECLARE_MEMBER_SET(type, name)                            \
-    virtual inline void set##name(##type value) { this->m_##name = value; }
+    virtual inline void set##name(type value) { this->m_##name = value; }
 
 #define DECLARE_MEMBER_GET(type, name)                            \
     virtual inline type get##name() { return this->m_##name; }
@@ -90,10 +90,10 @@ public:                                                \
     DECLARE_INTERFACE_MEMBER_GET(type, name)
 
 
-#define RPC_FUNCTION(name) class name## : public IRpcFunction {                \
+#define RPC_FUNCTION(name) class name : public IRpcFunction {                \
 public:                                                                        \
-    name##() : m_Name(STR(name)) {}                                    \
-    ~##name(){ }                                                            \
+    name() : m_Name(STR(name)) {}                                    \
+    ~name(){ }                                                            \
     acre::Result call(IServer *vServer, IMessage *vMessage)
 
 
