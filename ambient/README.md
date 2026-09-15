@@ -250,3 +250,38 @@ Python analysis exactly:
 | `fight` | 88.5% |
 | `idle` (foliage/waves) | 0.0% |
 | `idle2` (rain/thunder) | 59.0% |
+
+---
+
+# Status: working end to end (single client)
+
+Confirmed by ear and by the dump file: game audio is captured from Arma's
+PipeWire node, gated, scaled and summed into TeamSpeak's capture buffer in
+real time, with `*edited |= 1` set so TeamSpeak keeps the modified samples.
+
+## What the dump proves, exactly
+
+`ambientDumpFile` is written from inside
+`CSoundEngine::onEditCapturedVoiceDataEvent`, after the mix, from the same
+`samples` buffer that is handed back to TeamSpeak. So it is not a
+reconstruction or a parallel recording — it is the actual buffer TeamSpeak
+goes on to encode and transmit.
+
+## What is still unverified
+
+**No remote listener has received it yet.** The dump proves the buffer we hand
+TeamSpeak contains the mix. It does not prove what comes out the far end.
+Two things sit between the two:
+
+1. **Opus encoding.** TeamSpeak encodes voice with Opus, and a channel set to
+   *Opus Voice* at a low quality level is tuned for speech, not gunfire.
+   Ambience may survive noticeably worse than the dump suggests. If received
+   audio disappoints, raise the channel's codec quality or switch it to
+   *Opus Music* before assuming the mix is at fault.
+2. **Receive-side radio DSP** (`FilterRadio.cpp`: bandpass 750-4000 Hz, noise,
+   distortion, hard clip) should apply to the ambience automatically, since
+   the injection point is pre-encode. Expected, not yet confirmed by ear.
+
+Both are settled by one Tier B session with a second player — which also
+exercises `onPluginCommandEvent`, the only path touched by the mingw assembly
+replacement that solo testing cannot reach.
