@@ -10,6 +10,7 @@
 #include "Engine.h"
 
 #include "TextMessage.h"
+#include "AmbientCapture.h"
 
 #include <string>
 
@@ -18,6 +19,9 @@ RPC_FUNCTION(startRadioSpeaking) {
     const std::string radioId = std::string((char *)vMessage->getParameter(0));
 
     CEngine::getInstance()->getClient()->localStartSpeaking(acre::Speaking::radio, radioId);
+
+    // Capture the local game's audio only while actually transmitting.
+    CAmbientCapture::getInstance()->start();
 
     return acre::Result::ok;
 }
