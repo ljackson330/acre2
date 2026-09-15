@@ -200,19 +200,24 @@ exactly as it does to voice. Nothing extra is needed for that.
 
 ## Recording a demo
 
-1. Start the helper: `python3 ambient/ambient-helper.py`
-2. In TeamSpeak: **Tools → Options → Capture → Begin Test**. This turns on
-   local microphone playback, so TeamSpeak's own output node carries what the
-   capture pipeline produced.
-3. Get near some combat in Arma, then:
-   ```
-   ./ambient/record-demo.sh 30 demo.wav
-   ```
-4. Key up the radio and talk over the gunfire.
+Do **not** use TeamSpeak's Tools → Options → Capture → Begin Test. It mutes the
+microphone and distorts the audio, so it shows neither your voice nor what a
+listener would receive. The gameplan suggested it for Tier A; it does not work.
 
-The recording captures **TeamSpeak's** output node, not Arma's. That matters:
-it is evidence the game audio actually travelled through the plugin's mix into
-the outgoing stream, rather than merely that Arma was audible nearby.
+Instead have the plugin write the outgoing stream to disk. That buffer is what
+TeamSpeak encodes and sends, so the file *is* the transmitted audio:
+
+1. Set `ambientDumpFile` in `acre2.ini` to an absolute path, e.g.
+   `Z:\home\you\acre2_outgoing.wav` (Wine maps `Z:` to `/`).
+2. **Restart TeamSpeak** so the setting is read.
+3. Start the helper: `python3 ambient/ambient-helper.py`
+4. Key up the radio near some combat and talk.
+5. Inspect it: `python3 ambient/wav_stats.py ~/acre2_outgoing.wav 2`
+
+Each transmission overwrites the file, so collect it between key-ups.
+
+`record-demo.sh` records TeamSpeak's own output node instead, which is useful
+once a second client is receiving, but it cannot show your own outgoing audio.
 
 ## Tuning
 
@@ -223,6 +228,13 @@ the outgoing stream, rather than merely that Arma was audible nearby.
 | `ambientEnabled` | `true` | master switch |
 | `ambientVolume` | `0.5` | ambience level relative to voice |
 | `ambientGateThreshold` | `-35.0` | dBFS below which ambience is suppressed |
+
+**Settings are read once, when the plugin starts.** `CEngine::initialize()`
+loads `acre2.ini` at TeamSpeak launch and never re-reads it, so editing the
+file while TeamSpeak is running has no effect — restart TeamSpeak after any
+change. When a dump path is picked up, capture start logs
+`AMBIENT: dumping outgoing stream to <path>`; the absence of that line means
+the setting was not loaded.
 
 `ambientVolume` is the one to try first. 0.5 was chosen to sit clearly under
 speech given the Phase 0 levels (combat at −23.7 dBFS RMS), but it is a
