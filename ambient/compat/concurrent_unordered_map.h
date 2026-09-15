@@ -8,8 +8,13 @@
 // concurrent_unordered_map permits insertion concurrent with traversal;
 // std::unordered_map invalidates all iterators when an insert triggers a
 // rehash, which would be a real use-after-free in KeyHandlerEngine's iteration
-// loop. std::map is node-based and never invalidates iterators on insert, so
-// it preserves the guarantee the calling code was written against.
+// loop. std::map is node-based and never invalidates iterators on insert.
+//
+// This is NOT a full concurrency guarantee. operator[] returns a reference
+// that outlives the lock, so a concurrent unsafe_erase of that key frees the
+// node while a caller still holds a reference to it. MSVC's container has the
+// same hazard, so this is not a regression -- but callers are relied upon to
+// serialize erase against use, exactly as they already are upstream.
 #pragma once
 
 #include <map>

@@ -170,9 +170,11 @@ Phase 3 must set bit 1 after mixing. Skipping it presents exactly as "capture
 and mixing are broken" during Tier A, with the mix working perfectly and the
 result being thrown away downstream.
 
-Bit 2 is also worth reading on input rather than ignoring: it says whether this
-buffer is actually going to the server, so there is no point mixing into one
-that is not.
+Bit 2 reads as "whether the sound is about to be sent to the server" on input,
+which would make it a useful signal for skipping the mix on buffers that are
+not being transmitted. That reading comes from terse docs and is **unverified**
+— log its actual value on entry before relying on it. Bit 1 is unambiguous and
+load-bearing; implement that first and treat bit 2 as unconfirmed.
 
 ## Requirement 2 (resampling) is smaller than the gameplan assumed
 
