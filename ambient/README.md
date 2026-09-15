@@ -146,3 +146,40 @@ Skipped: no second player available, and received radio audio is known to come
 through the TS3 node, not Arma's. That is the same process-separation property
 the PID-targeted design relies on, and it gets proven for free the first time
 Tier A runs.
+
+---
+
+# Resolved: the `edited` flag and the TS3 capture format
+
+From the TeamSpeak Plugin API manual, *Accessing the voice buffer*
+(<https://teamspeakdocs.github.io/PluginAPI/client_html/ar01s18.html>).
+
+## `edited` is a bitmask, and ACRE2 never writes it
+
+[TsCallbacks_sound.cpp:130](../extensions/src/ACRE2TS/TsCallbacks_sound.cpp#L130)
+ignores the `edited` out-parameter entirely. That costs nothing today because
+stock ACRE2 does not modify captured samples — but it is a latent trap for this
+feature:
+
+- **Bit 1 (value 1), on output:** set it if the sound data was changed —
+  `*edited |= 1`. **Without this, TeamSpeak discards our mixed samples.**
+- **Bit 2 (value 2), on input:** whether the sound is about to be sent to the
+  server. Clear it (`*edited &= ~2`) to suppress transmission.
+
+Phase 3 must set bit 1 after mixing. Skipping it presents exactly as "capture
+and mixing are broken" during Tier A, with the mix working perfectly and the
+result being thrown away downstream.
+
+Bit 2 is also worth reading on input rather than ignoring: it says whether this
+buffer is actually going to the server, so there is no point mixing into one
+that is not.
+
+## Requirement 2 (resampling) is smaller than the gameplan assumed
+
+The manual specifies the capture buffer as **signed 16-bit @ 48 kHz**. The
+Phase 0 takes came off PipeWire at 48 kHz. The rates match, so **no resampling
+stage is needed** — the converter reduces to a stereo→mono downmix plus a
+float→int16 conversion, both trivial and cheap enough for the audio callback.
+
+This holds for the Linux backend. A Windows implementation negotiates its own
+WASAPI format and must confirm the rate separately.
