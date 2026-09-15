@@ -22,7 +22,7 @@ public:
     acre::Result onEditPostProcessVoiceDataEvent(acre::id_t id, short* samples, int sampleCount, int channels, const unsigned int* channelSpeakerArray, unsigned int* channelFillMask);
     acre::Result onEditMixedPlaybackVoiceDataEvent(short* samples, int sampleCount, int channels, const unsigned int speakerMask);
 
-    acre::Result onEditCapturedVoiceDataEvent(short* samples, int sampleCount, int channels);
+    acre::Result onEditCapturedVoiceDataEvent(short* samples, int sampleCount, int channels, int* edited);
     CSoundMixer * getSoundMixer() { return this->soundMixer; };
     DECLARE_MEMBER(BOOL, IsRunning);
     DECLARE_MEMBER(acre::CurveModel, CurveModel);

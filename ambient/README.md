@@ -185,3 +185,56 @@ float→int16 conversion, both trivial and cheap enough for the audio callback.
 
 This holds for the Linux backend. A Windows implementation negotiates its own
 WASAPI format and must confirm the rate separately.
+
+---
+
+# Demo / Tier A verification
+
+The mix is live: captured game audio is gated, scaled and summed into the
+outgoing capture buffer in `CSoundEngine::onEditCapturedVoiceDataEvent`, which
+then sets `*edited |= 1` so TeamSpeak keeps the modified samples.
+
+Because the injection point is pre-encode, the receive-side radio DSP
+(bandpass, noise, distortion, hard clip) applies to the ambience automatically,
+exactly as it does to voice. Nothing extra is needed for that.
+
+## Recording a demo
+
+1. Start the helper: `python3 ambient/ambient-helper.py`
+2. In TeamSpeak: **Tools → Options → Capture → Begin Test**. This turns on
+   local microphone playback, so TeamSpeak's own output node carries what the
+   capture pipeline produced.
+3. Get near some combat in Arma, then:
+   ```
+   ./ambient/record-demo.sh 30 demo.wav
+   ```
+4. Key up the radio and talk over the gunfire.
+
+The recording captures **TeamSpeak's** output node, not Arma's. That matters:
+it is evidence the game audio actually travelled through the plugin's mix into
+the outgoing stream, rather than merely that Arma was audible nearby.
+
+## Tuning
+
+`acre2.ini` (next to the other ACRE2 settings) gains three keys:
+
+| key | default | meaning |
+|---|---|---|
+| `ambientEnabled` | `true` | master switch |
+| `ambientVolume` | `0.5` | ambience level relative to voice |
+| `ambientGateThreshold` | `-35.0` | dBFS below which ambience is suppressed |
+
+`ambientVolume` is the one to try first. 0.5 was chosen to sit clearly under
+speech given the Phase 0 levels (combat at −23.7 dBFS RMS), but it is a
+starting point, not a measured optimum — that needs a real listener.
+
+## Gate implementation verified against the Phase 0 takes
+
+The shipped C++ gate was run over the original recordings and reproduces the
+Python analysis exactly:
+
+| take | windows passed |
+|---|---|
+| `fight` | 88.5% |
+| `idle` (foliage/waves) | 0.0% |
+| `idle2` (rain/thunder) | 59.0% |

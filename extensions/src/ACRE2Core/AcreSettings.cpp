@@ -17,6 +17,9 @@ acre::Result CAcreSettings::save(std::string filename) {
     iniFile << "disableRadioNoise = " << (this->m_DisableRadioNoise ? "true" : "false") << ";\n";
     iniFile << "disableUnmuteClients = " << (this->m_DisableUnmuteClients ? "true" : "false") << ";\n";
     iniFile << "disableTS3ChannelSwitch = " << (this->m_DisableTS3ChannelSwitch ? "true" : "false") << ";\n";
+    iniFile << "ambientEnabled = " << (this->m_AmbientEnabled ? "true" : "false") << ";\n";
+    iniFile << "ambientVolume = " << this->m_AmbientVolume << ";\n";
+    iniFile << "ambientGateThreshold = " << this->m_AmbientGateThreshold << ";\n";
 
     //LOG("Config Save: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);
     iniFile.flush();
@@ -43,6 +46,11 @@ acre::Result CAcreSettings::load(std::string filename) {
     this->m_DisableRadioNoise = config.GetBoolean("acre2", "disableRadioNoise", false);
     this->m_DisableUnmuteClients = config.GetBoolean("acre2", "disableUnmuteClients", false);
     this->m_DisableTS3ChannelSwitch = config.GetBoolean("acre2", "disableTS3ChannelSwitch", false);
+    this->m_AmbientEnabled = config.GetBoolean("acre2", "ambientEnabled", true);
+    this->m_AmbientVolume = (float)config.GetReal("acre2", "ambientVolume", 0.5f);
+    // -35 dBFS: measured as the point where foliage, waves and footsteps are
+    // fully suppressed while combat still passes (see ambient/README.md).
+    this->m_AmbientGateThreshold = (float)config.GetReal("acre2", "ambientGateThreshold", -35.0f);
 
     //LOG("Config Load: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);
     this->m_Path = filename;

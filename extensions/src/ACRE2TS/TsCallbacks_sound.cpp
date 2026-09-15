@@ -128,5 +128,8 @@ void ts3plugin_onEditMixedPlaybackVoiceDataEvent(uint64 serverConnectionHandlerI
 }
 
 void ts3plugin_onEditCapturedVoiceDataEvent(uint64 server, short* samples, int sampleCount, int channels, int* edited) {
-    CEngine::getInstance()->getSoundEngine()->onEditCapturedVoiceDataEvent(samples, sampleCount, channels);
+    // `edited` is a bitmask. Bit 1 must be set when the samples were modified,
+    // or TeamSpeak discards the changes; the sound engine sets it if it mixed
+    // anything in.
+    CEngine::getInstance()->getSoundEngine()->onEditCapturedVoiceDataEvent(samples, sampleCount, channels, edited);
 }

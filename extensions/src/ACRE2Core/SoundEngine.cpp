@@ -99,7 +99,7 @@ acre::Result CSoundEngine::onEditMixedPlaybackVoiceDataEvent(short* samples, int
     return acre::Result::ok;
 }
 
-acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int sampleCount, int channels) {
+acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int sampleCount, int channels, int* edited) {
     if (CEngine::getInstance()->getSoundSystemOverride())
         return acre::Result::ok;
     if (!CEngine::getInstance()->getGameServer())
@@ -108,25 +108,48 @@ acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int samp
         return acre::Result::error;
 
     /*
-     * Ambient battle sound, phase 2 step 3: drain the capture ring but do not
-     * yet mix. This verifies buffer health -- start/stop alignment, and
-     * over/underrun behaviour across repeated transmissions -- before any
-     * change is made to what the listener actually hears.
+     * Ambient battle sound: mix the local game's audio into the outgoing
+     * transmission, so listeners hear the transmitter's combat environment.
      *
-     * Mixing comes next, and must also set *edited bit 1 in the TeamSpeak
-     * callback or the modified samples are discarded.
+     * This is the injection point the whole design targets -- pre-encode, so
+     * the receive-side radio DSP (bandpass, noise, distortion) applies to the
+     * ambience automatically, exactly as it does to voice.
      */
     CAmbientCapture *ambient = CAmbientCapture::getInstance();
-    if (ambient->isRunning() && sampleCount > 0) {
+    if (CAcreSettings::getInstance()->getAmbientEnabled()
+        && ambient->isRunning() && sampleCount > 0 && channels > 0) {
+
         ambient->logFormatOnce(sampleCount, channels);
 
         // Fixed storage: this is the audio path, so no allocation here.
-        // TeamSpeak delivers 480 or 960 samples per call at 48 kHz.
         int16_t ambientBuffer[MAX_AMBIENT_SAMPLES];
-        const int wanted = (sampleCount < MAX_AMBIENT_SAMPLES) ? sampleCount
+        const int frames = (sampleCount < MAX_AMBIENT_SAMPLES) ? sampleCount
                                                                : MAX_AMBIENT_SAMPLES;
-        ambient->drain(ambientBuffer, wanted);
+        const size_t produced = ambient->drain(ambientBuffer, frames);
+
+        if (produced > 0) {
+            const float volume = CAcreSettings::getInstance()->getAmbientVolume();
+            for (int frame = 0; frame < frames; ++frame) {
+                const float contribution = ambientBuffer[frame] * volume;
+                for (int channel = 0; channel < channels; ++channel) {
+                    const int index = (frame * channels) + channel;
+                    float mixed = static_cast<float>(samples[index]) + contribution;
+
+                    if (mixed > LIMITER::max()) mixed = LIMITER::max();
+                    else if (mixed < LIMITER::min()) mixed = LIMITER::min();
+
+                    samples[index] = static_cast<short>(mixed);
+                }
+            }
+
+            // Bit 1 tells TeamSpeak the samples changed. Without it every
+            // edit above is silently discarded.
+            if (edited != nullptr) {
+                *edited |= 1;
+            }
+        }
     }
+
     /*
     if (CEngine::getInstance()->getSelf()) {
         if (CEngine::getInstance()->getSelf()->getSpeaking()) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compat.h"
+#include "AmbientGate.h"
 #include "AmbientRingBuffer.h"
 
 #include <atomic>
@@ -39,9 +40,10 @@ public:
     /*
      * Consumer side, called from TeamSpeak's capture callback.
      *
-     * Fills out[] with sampleCount mono samples, zero-filled if capture is not
-     * running or has not delivered enough yet, so callers can mix
-     * unconditionally. Returns the number of real samples produced.
+     * Fills out[] with sampleCount mono samples, noise-gated and ready to mix,
+     * zero-filled if capture is not running or has not delivered enough yet,
+     * so callers can mix unconditionally. Returns the number of real samples
+     * produced.
      */
     size_t drain(int16_t *out, size_t sampleCount);
 
@@ -75,5 +77,8 @@ private:
     std::atomic<uint64_t> m_bytesThisSession{0};
 
     CAmbientRingBuffer m_ring{RING_CAPACITY, RING_MAX_BACKLOG};
+    // Owned here rather than at the mix site so its hold state is reset with
+    // each transmission and its threshold is resolved once, not per callback.
+    CAmbientGate m_gate;
     std::atomic<bool> m_formatLogged{false};
 };

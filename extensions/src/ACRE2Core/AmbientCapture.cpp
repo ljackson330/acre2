@@ -1,5 +1,6 @@
 #include "AmbientCapture.h"
 
+#include "AcreSettings.h"
 #include "Log.h"
 
 #include <chrono>
@@ -106,6 +107,8 @@ void CAmbientCapture::start() {
 
     this->m_bytesThisSession.store(0, std::memory_order_release);
     this->m_ring.reset();
+    this->m_gate.reset();
+    this->m_gate.setThresholdDb(CAcreSettings::getInstance()->getAmbientGateThreshold());
     this->m_formatLogged.store(false, std::memory_order_release);
     this->m_running.store(true, std::memory_order_release);
     this->m_thread = std::thread(&CAmbientCapture::readLoop, this);
@@ -200,7 +203,11 @@ size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
         memset(out, 0x00, sampleCount * sizeof(int16_t));
         return 0;
     }
-    return this->m_ring.read(out, sampleCount);
+    const size_t produced = this->m_ring.read(out, sampleCount);
+    if (produced > 0) {
+        this->m_gate.process(out, sampleCount);
+    }
+    return produced;
 }
 
 void CAmbientCapture::logFormatOnce(int sampleCount, int channels) {

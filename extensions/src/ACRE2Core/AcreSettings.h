@@ -31,5 +31,13 @@ public:
 
     DECLARE_MEMBER(bool, EnableAudioTest);
 
+    // Ambient battle sound: mixes the local game's audio into outgoing radio
+    // transmissions. AmbientVolume scales it relative to the player's voice;
+    // AmbientGateThreshold is in dBFS, below which quiet ambience is
+    // suppressed rather than transmitted.
+    DECLARE_MEMBER(bool, AmbientEnabled);
+    DECLARE_MEMBER(float, AmbientVolume);
+    DECLARE_MEMBER(float, AmbientGateThreshold);
+
     DECLARE_MEMBER(std::string, Path);
 };
