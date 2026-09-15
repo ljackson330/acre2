@@ -94,22 +94,51 @@ to peak — ample to mix under voice without amplification.
 is likely a stereo→mono downmix with no resampling. Does not transfer to a
 Windows implementation — WASAPI negotiates its own format.
 
-## Open: is the noise gate (requirement 4) needed?
+## Requirement 4 resolved — the gate IS needed
 
-Undecided. Level distribution over `fight` in 50 ms windows:
+Two further idle takes settled it. `idle` is walking/running through foliage and
+sand beside waves; `idle2` is heavy rain with occasional thunder.
 
-```
-p5    −55.3 dBFS      p50   −26.9 dBFS      p99   −17.8 dBFS
-```
+RMS per 50 ms window:
 
-The −55.3 dBFS floor looks low enough to make a gate pointless — but this take
-is 30s of *continuous* firefight (p25 is already −34 dBFS), so it contains no
-idle. The gate's job is suppressing residue during quiet transmissions, and that
-condition is unmeasured.
+| take | p5 | p25 | p50 | p75 | p95 | p99 |
+|---|---|---|---|---|---|---|
+| `fight` | −55.3 | −34.1 | −26.9 | −21.5 | −18.6 | −17.8 |
+| `idle` (foliage/waves) | −57.1 | −54.3 | −52.6 | −50.6 | −47.6 | −43.1 |
+| `idle2` (rain/thunder) | −44.8 | −43.2 | −38.1 | −33.9 | −26.8 | −23.8 |
 
-**Needs one more take:** 30s standing or walking somewhere quiet, sliders zeroed,
-no combat. Floor near −55 dBFS → drop the gate from Phase 2. Floor near −35 dBFS
-→ build it.
+The earlier reading — that `fight`'s −55 dBFS floor made a gate pointless — was
+the wrong measure. What matters is not the combat take's floor but the *idle
+take's ceiling*: `idle` sits at −52.6 dBFS median with a −36.5 dBFS worst-case
+window. That is a continuous bed that would otherwise ride under every single
+transmission. A gate removes it outright.
+
+### Recommended: −35 dBFS threshold, 10 ms window, 200 ms hold
+
+| threshold | `fight` open | `idle` open | `idle2` open |
+|---|---|---|---|
+| −40 dBFS | 91.5% | 4.8% | 74.9% |
+| **−35 dBFS** | **88.5%** | **0.0%** | **59.0%** |
+| −30 dBFS | 83.8% | 0.0% | 32.9% |
+
+−35 dBFS is where foliage/waves reaches exactly zero while combat still passes
+88.5%. Tune against Tier B, but start here.
+
+**The hold is not optional.** A bare per-window threshold on `fight` produces 116
+transitions in 30 s (3.9/s) — audible chattering. A 200 ms hold cuts that to
+0.2/s while *raising* combat pass-through, since it bridges inter-shot gaps.
+
+### Rain passes the gate, and that is correct
+
+No threshold separates heavy rain from combat, because they genuinely overlap:
+`idle2` peaks at −13.3 dBFS against `fight`'s −12.9 dBFS. A peak-based gate
+cannot tell thunder from gunfire, and it should not try — requirement 4 is an
+amplitude gate, explicitly not a content classifier.
+
+At −35 dBFS, 59% of the rain take passes. That is the right outcome: a real
+operator transmitting in a rainstorm *would* have rain in their signal, and
+thunder loud enough to clear the gate passes for the same reason. This is the
+same principle as requirement 6's acceptance of own-gunfire dominance.
 
 ## Take 5 (isolation) — not run
 
