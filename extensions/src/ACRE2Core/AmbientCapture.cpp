@@ -105,6 +105,8 @@ void CAmbientCapture::start() {
     }
 
     this->m_bytesThisSession.store(0, std::memory_order_release);
+    this->m_ring.reset();
+    this->m_formatLogged.store(false, std::memory_order_release);
     this->m_running.store(true, std::memory_order_release);
     this->m_thread = std::thread(&CAmbientCapture::readLoop, this);
 
@@ -137,27 +139,46 @@ void CAmbientCapture::stop() {
     }
 
     const uint64_t bytes = this->m_bytesThisSession.load(std::memory_order_acquire);
-    LOG("AMBIENT: capture stopped -- %llu bytes (%.2f s of audio)",
-        (unsigned long long)bytes, bytes / 2.0 / 48000.0);
+    LOG("AMBIENT: capture stopped -- %llu bytes (%.2f s of audio); "
+        "ring: overruns=%u underruns=%u skips=%u residual=%zu samples",
+        (unsigned long long)bytes, bytes / 2.0 / SAMPLE_RATE,
+        this->m_ring.overruns(), this->m_ring.underruns(),
+        this->m_ring.skipped(), this->m_ring.fill());
 }
 
 void CAmbientCapture::readLoop() {
     // Wire format is signed 16-bit mono at 48 kHz: already exactly what
     // onEditCapturedVoiceDataEvent expects, so there is nothing to convert.
-    char buffer[4096];
+    // Aligned for the int16_t reinterpret below.
+    alignas(int16_t) char buffer[4096];
+    int carry = 0;  // trailing byte of a sample split across two recv() calls
 
     while (this->m_running.load(std::memory_order_acquire)) {
-        const int received = recv(this->m_socket, buffer, sizeof(buffer), 0);
+        const int received = recv(this->m_socket, buffer + carry,
+                                  sizeof(buffer) - carry, 0);
 
         if (received > 0) {
             this->m_bytesThisSession.fetch_add(received, std::memory_order_relaxed);
-            // Step 3 will drain this into a ring buffer. For now the read
-            // itself is the thing being verified.
+            // recv() can split a sample across reads; carry the odd byte over.
+            const int total = carry + received;
+            this->m_ring.write(reinterpret_cast<const int16_t *>(buffer),
+                               total / 2);
+            if (total & 1) {
+                buffer[0] = buffer[total - 1];
+                carry = 1;
+            } else {
+                carry = 0;
+            }
             continue;
         }
 
         if (received == 0) {
-            LOG("AMBIENT: helper closed the connection");
+            // stop() shuts the socket down to unblock this recv, which also
+            // returns 0 -- so only an orderly close while we still expected
+            // audio means the helper actually went away.
+            if (this->m_running.load(std::memory_order_acquire)) {
+                LOG("AMBIENT: helper closed the connection");
+            }
             break;
         }
 
@@ -172,4 +193,19 @@ void CAmbientCapture::readLoop() {
     }
 
     this->m_running.store(false, std::memory_order_release);
+}
+
+size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
+    if (!this->m_running.load(std::memory_order_acquire)) {
+        memset(out, 0x00, sampleCount * sizeof(int16_t));
+        return 0;
+    }
+    return this->m_ring.read(out, sampleCount);
+}
+
+void CAmbientCapture::logFormatOnce(int sampleCount, int channels) {
+    if (!this->m_formatLogged.exchange(true, std::memory_order_acq_rel)) {
+        LOG("AMBIENT: capture callback format -- sampleCount=%d channels=%d "
+            "(helper supplies mono 48 kHz)", sampleCount, channels);
+    }
 }

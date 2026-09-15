@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compat.h"
+#include "AmbientRingBuffer.h"
 
 #include <atomic>
 #include <thread>
@@ -35,6 +36,19 @@ public:
 
     inline bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
+    /*
+     * Consumer side, called from TeamSpeak's capture callback.
+     *
+     * Fills out[] with sampleCount mono samples, zero-filled if capture is not
+     * running or has not delivered enough yet, so callers can mix
+     * unconditionally. Returns the number of real samples produced.
+     */
+    size_t drain(int16_t *out, size_t sampleCount);
+
+    // Records the real callback geometry once per transmission, to confirm
+    // what TeamSpeak actually hands us rather than what the docs promise.
+    void logFormatOnce(int sampleCount, int channels);
+
 private:
     CAmbientCapture() = default;
     ~CAmbientCapture();
@@ -46,6 +60,11 @@ private:
 
     static constexpr unsigned short HELPER_PORT = 47806;
     static constexpr int CONNECT_TIMEOUT_MS = 200;
+    static constexpr size_t SAMPLE_RATE = 48000;
+    // 200 ms of slack for scheduling jitter, but never more than 100 ms behind
+    // live -- beyond that the ambience lags the speech it accompanies.
+    static constexpr size_t RING_CAPACITY = SAMPLE_RATE / 5;
+    static constexpr size_t RING_MAX_BACKLOG = SAMPLE_RATE / 10;
 
     SOCKET m_socket = INVALID_SOCKET;
     bool m_wsaReady = false;
@@ -54,4 +73,7 @@ private:
 
     // Step 2 instrumentation: proves start/stop alignment with transmit state.
     std::atomic<uint64_t> m_bytesThisSession{0};
+
+    CAmbientRingBuffer m_ring{RING_CAPACITY, RING_MAX_BACKLOG};
+    std::atomic<bool> m_formatLogged{false};
 };

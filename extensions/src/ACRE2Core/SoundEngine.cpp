@@ -1,6 +1,14 @@
 #include "SoundEngine.h"
 #include "AcreSettings.h"
+#include "AmbientCapture.h"
 #include "Engine.h"
+
+#include <cstdint>
+
+namespace {
+    // Generous headroom over TeamSpeak's usual 480/960 samples per callback.
+    constexpr int MAX_AMBIENT_SAMPLES = 4096;
+}
 
 typedef std::numeric_limits<short int> LIMITER;
 
@@ -98,6 +106,27 @@ acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int samp
         return acre::Result::error;
     if (!CEngine::getInstance()->getGameServer()->getConnected())
         return acre::Result::error;
+
+    /*
+     * Ambient battle sound, phase 2 step 3: drain the capture ring but do not
+     * yet mix. This verifies buffer health -- start/stop alignment, and
+     * over/underrun behaviour across repeated transmissions -- before any
+     * change is made to what the listener actually hears.
+     *
+     * Mixing comes next, and must also set *edited bit 1 in the TeamSpeak
+     * callback or the modified samples are discarded.
+     */
+    CAmbientCapture *ambient = CAmbientCapture::getInstance();
+    if (ambient->isRunning() && sampleCount > 0) {
+        ambient->logFormatOnce(sampleCount, channels);
+
+        // Fixed storage: this is the audio path, so no allocation here.
+        // TeamSpeak delivers 480 or 960 samples per call at 48 kHz.
+        int16_t ambientBuffer[MAX_AMBIENT_SAMPLES];
+        const int wanted = (sampleCount < MAX_AMBIENT_SAMPLES) ? sampleCount
+                                                               : MAX_AMBIENT_SAMPLES;
+        ambient->drain(ambientBuffer, wanted);
+    }
     /*
     if (CEngine::getInstance()->getSelf()) {
         if (CEngine::getInstance()->getSelf()->getSpeaking()) {
