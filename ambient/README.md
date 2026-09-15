@@ -285,3 +285,55 @@ Two things sit between the two:
 Both are settled by one Tier B session with a second player — which also
 exercises `onPluginCommandEvent`, the only path touched by the mingw assembly
 replacement that solo testing cannot reach.
+
+---
+
+# Picking this up again
+
+## To get running
+
+```
+./ambient/build-mingw.sh --status     # is the mingw build still installed?
+./ambient/build-mingw.sh --install    # if not, or after any code change
+python3 ambient/ambient-helper.py     # leave running; required or nothing captures
+```
+
+Then launch Arma + TeamSpeak via `~/Arma3Helper.sh`. Restart TeamSpeak after
+any `acre2.ini` change.
+
+Healthy log lines during a transmission:
+
+```
+AMBIENT: capture started
+AMBIENT: dumping outgoing stream to <path>        (only if ambientDumpFile set)
+AMBIENT: capture callback format -- sampleCount=480 channels=1
+AMBIENT: mixed into N callbacks; mean ambient level -NN.N dBFS
+AMBIENT: capture stopped -- N bytes (N.NN s); ring: overruns=0 underruns=N skips=0
+```
+
+`helper not reachable` means the helper is down. `mixed into 0 callbacks` means
+capture ran but contributed nothing. Overruns or skips above zero mean the rates
+have drifted and the ring sizing needs revisiting — they were zero across every
+test so far.
+
+## Next step: Phase 4, needs a second player
+
+Everything left requires someone on the other end of the radio:
+
+1. **Tune `ambientVolume`.** Currently `0.5`, reasoned from Phase 0 levels
+   (combat at -23.7 dBFS RMS) but never checked against a listener. This is the
+   first thing to adjust.
+2. **Check Opus survival.** Gunfire may fare badly through *Opus Voice* at low
+   quality. Try raising the channel codec quality or *Opus Music* before
+   blaming the mix.
+3. **Confirm the receive-side radio DSP** applies to the ambience. It should,
+   automatically, given the pre-encode injection point.
+4. **Confirm `onPluginCommandEvent` still works.** It is the only path touched
+   by the mingw assembly replacement that solo testing cannot reach. A broken
+   trampoline would show up as radio state not syncing between players.
+
+## Deferred, per gameplan.md — nothing found so far argues for pulling these forward
+
+Supersonic crack, nearby direct-voice bleed, and ducking/AGC on the combined
+signal. The last one may become relevant if Phase 4 shows the mix clipping
+unpleasantly against the existing hard clip in `FilterRadio.cpp`.
