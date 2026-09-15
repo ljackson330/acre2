@@ -205,7 +205,10 @@ size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
     }
     const size_t produced = this->m_ring.read(out, sampleCount);
     if (produced > 0) {
-        this->m_gate.process(out, sampleCount);
+        // Gate only the real samples. read() zero-fills any shortfall, and
+        // including that tail would drag the window RMS down and close the
+        // gate on a buffer that did contain audio.
+        this->m_gate.process(out, produced);
     }
     return produced;
 }
