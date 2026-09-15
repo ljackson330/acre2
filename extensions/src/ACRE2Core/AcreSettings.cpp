@@ -20,6 +20,9 @@ acre::Result CAcreSettings::save(std::string filename) {
     iniFile << "ambientEnabled = " << (this->m_AmbientEnabled ? "true" : "false") << ";\n";
     iniFile << "ambientVolume = " << this->m_AmbientVolume << ";\n";
     iniFile << "ambientGateThreshold = " << this->m_AmbientGateThreshold << ";\n";
+    // No trailing ';' here: this parser only treats ';' as a comment when
+    // preceded by whitespace, so it would be read back as part of the path.
+    iniFile << "ambientDumpFile = " << this->m_AmbientDumpFile << "\n";
 
     //LOG("Config Save: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);
     iniFile.flush();
@@ -51,6 +54,12 @@ acre::Result CAcreSettings::load(std::string filename) {
     // -35 dBFS: measured as the point where foliage, waves and footsteps are
     // fully suppressed while combat still passes (see ambient/README.md).
     this->m_AmbientGateThreshold = (float)config.GetReal("acre2", "ambientGateThreshold", -35.0f);
+    this->m_AmbientDumpFile = config.Get("acre2", "ambientDumpFile", "");
+    while (!this->m_AmbientDumpFile.empty()
+           && (this->m_AmbientDumpFile.back() == ';'
+               || this->m_AmbientDumpFile.back() == ' ')) {
+        this->m_AmbientDumpFile.pop_back();
+    }
 
     //LOG("Config Load: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);
     this->m_Path = filename;

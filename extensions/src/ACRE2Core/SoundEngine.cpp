@@ -3,6 +3,7 @@
 #include "AmbientCapture.h"
 #include "Engine.h"
 
+#include <cmath>
 #include <cstdint>
 
 namespace {
@@ -129,7 +130,10 @@ acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int samp
 
         if (produced > 0) {
             const float volume = CAcreSettings::getInstance()->getAmbientVolume();
+            double sumSquares = 0.0;
             for (int frame = 0; frame < frames; ++frame) {
+                const double v = ambientBuffer[frame];
+                sumSquares += v * v;
                 const float contribution = ambientBuffer[frame] * volume;
                 for (int channel = 0; channel < channels; ++channel) {
                     const int index = (frame * channels) + channel;
@@ -142,12 +146,19 @@ acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int samp
                 }
             }
 
+            // Tells us whether ambience actually reached the stream, and at
+            // what level, without needing to monitor TeamSpeak externally.
+            ambient->noteMixed(sqrt(sumSquares / frames));
+
             // Bit 1 tells TeamSpeak the samples changed. Without it every
             // edit above is silently discarded.
             if (edited != nullptr) {
                 *edited |= 1;
             }
         }
+
+        // Records the outgoing buffer after mixing -- what is actually sent.
+        ambient->dumpOutgoing(samples, sampleCount, channels);
     }
 
     /*

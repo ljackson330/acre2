@@ -2,6 +2,7 @@
 
 #include "compat.h"
 #include "AmbientGate.h"
+#include "AmbientWavWriter.h"
 #include "AmbientRingBuffer.h"
 
 #include <atomic>
@@ -51,6 +52,14 @@ public:
     // what TeamSpeak actually hands us rather than what the docs promise.
     void logFormatOnce(int sampleCount, int channels);
 
+    // Writes the post-mix outgoing buffer to disk when a dump file is
+    // configured. This is the transmitted stream, so it is both the proof the
+    // feature works and the demo of what a listener hears.
+    void dumpOutgoing(const short *samples, int sampleCount, int channels);
+
+    // Per-transmission mix telemetry, reported on stop().
+    void noteMixed(double ambientRms);
+
 private:
     CAmbientCapture() = default;
     ~CAmbientCapture();
@@ -80,5 +89,8 @@ private:
     // Owned here rather than at the mix site so its hold state is reset with
     // each transmission and its threshold is resolved once, not per callback.
     CAmbientGate m_gate;
+    CAmbientWavWriter m_dump;
+    std::atomic<uint32_t> m_mixedCallbacks{0};
+    std::atomic<double> m_ambientRmsSum{0.0};
     std::atomic<bool> m_formatLogged{false};
 };

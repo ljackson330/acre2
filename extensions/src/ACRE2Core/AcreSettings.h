@@ -38,6 +38,9 @@ public:
     DECLARE_MEMBER(bool, AmbientEnabled);
     DECLARE_MEMBER(float, AmbientVolume);
     DECLARE_MEMBER(float, AmbientGateThreshold);
+    // Absolute path; empty disables. Writes the outgoing voice stream after
+    // mixing -- what TeamSpeak actually encodes and sends.
+    DECLARE_MEMBER(std::string, AmbientDumpFile);
 
     DECLARE_MEMBER(std::string, Path);
 };

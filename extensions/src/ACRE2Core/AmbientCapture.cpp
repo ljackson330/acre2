@@ -4,6 +4,7 @@
 #include "Log.h"
 
 #include <chrono>
+#include <cmath>
 
 CAmbientCapture *CAmbientCapture::getInstance() {
     static CAmbientCapture instance;
@@ -109,6 +110,17 @@ void CAmbientCapture::start() {
     this->m_ring.reset();
     this->m_gate.reset();
     this->m_gate.setThresholdDb(CAcreSettings::getInstance()->getAmbientGateThreshold());
+    this->m_mixedCallbacks.store(0, std::memory_order_release);
+    this->m_ambientRmsSum.store(0.0, std::memory_order_release);
+
+    const std::string dumpPath = CAcreSettings::getInstance()->getAmbientDumpFile();
+    if (!dumpPath.empty()) {
+        if (this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
+            LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
+        } else {
+            LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
+        }
+    }
     this->m_formatLogged.store(false, std::memory_order_release);
     this->m_running.store(true, std::memory_order_release);
     this->m_thread = std::thread(&CAmbientCapture::readLoop, this);
@@ -139,6 +151,21 @@ void CAmbientCapture::stop() {
     if (this->m_socket != INVALID_SOCKET) {
         closesocket(this->m_socket);
         this->m_socket = INVALID_SOCKET;
+    }
+
+    const uint32_t mixed = this->m_mixedCallbacks.load(std::memory_order_acquire);
+    if (mixed > 0) {
+        const double meanRms = this->m_ambientRmsSum.load(std::memory_order_acquire) / mixed;
+        const double db = (meanRms > 0.0) ? 20.0 * log10(meanRms / 32768.0) : -999.0;
+        LOG("AMBIENT: mixed into %u callbacks; mean ambient level %.1f dBFS", mixed, db);
+    } else {
+        LOG("AMBIENT: mixed into 0 callbacks -- nothing was added to the outgoing stream");
+    }
+
+    if (this->m_dump.isOpen()) {
+        const uint32_t dumped = this->m_dump.bytesWritten();
+        this->m_dump.close();
+        LOG("AMBIENT: dump closed -- %.2f s written", dumped / 2.0 / SAMPLE_RATE);
     }
 
     const uint64_t bytes = this->m_bytesThisSession.load(std::memory_order_acquire);
@@ -217,5 +244,33 @@ void CAmbientCapture::logFormatOnce(int sampleCount, int channels) {
     if (!this->m_formatLogged.exchange(true, std::memory_order_acq_rel)) {
         LOG("AMBIENT: capture callback format -- sampleCount=%d channels=%d "
             "(helper supplies mono 48 kHz)", sampleCount, channels);
+    }
+}
+
+void CAmbientCapture::noteMixed(double ambientRms) {
+    this->m_mixedCallbacks.fetch_add(1, std::memory_order_relaxed);
+    // fetch_add is not available for double; a relaxed read-modify-write is
+    // fine here because only the capture callback thread touches this.
+    this->m_ambientRmsSum.store(
+        this->m_ambientRmsSum.load(std::memory_order_relaxed) + ambientRms,
+        std::memory_order_relaxed);
+}
+
+void CAmbientCapture::dumpOutgoing(const short *samples, int sampleCount, int channels) {
+    if (!this->m_dump.isOpen() || channels <= 0) {
+        return;
+    }
+    if (channels == 1) {
+        this->m_dump.write(reinterpret_cast<const int16_t *>(samples), sampleCount);
+        return;
+    }
+    // Downmix to mono so the dump matches the declared header.
+    for (int frame = 0; frame < sampleCount; ++frame) {
+        int32_t sum = 0;
+        for (int channel = 0; channel < channels; ++channel) {
+            sum += samples[(frame * channels) + channel];
+        }
+        const int16_t mono = static_cast<int16_t>(sum / channels);
+        this->m_dump.write(&mono, 1);
     }
 }
