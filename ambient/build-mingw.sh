@@ -103,7 +103,8 @@ echo
 
 # The plugin must not depend on mingw runtime DLLs -- they do not exist in the
 # Proton prefix and TeamSpeak would fail to load it with no diagnostic.
-if x86_64-w64-mingw32-objdump -p "$DLL" | grep -qE "libstdc\+\+-6|libgcc_s_seh-1|libwinpthread-1"; then
+DEPS=$(x86_64-w64-mingw32-objdump -p "$DLL" | grep "DLL Name:" || true)
+if grep -qE "libstdc\+\+-6|libgcc_s_seh-1|libwinpthread-1" <<<"$DEPS"; then
     echo "FAIL: DLL depends on mingw runtime DLLs; static linking did not take" >&2
     exit 1
 fi
@@ -111,17 +112,48 @@ echo "ok: no mingw runtime dependencies"
 
 echo "ok: $(x86_64-w64-mingw32-objdump -p "$DLL" | grep -oE "ts3plugin_[A-Za-z0-9_]+" | sort -u | wc -l) unique ts3plugin_* exports"
 
+# Installing to TeamSpeak's plugin folder alone is not enough. ACRE2Steam runs
+# as an Arma extension on every launch and copies the mod folder's plugin over
+# TeamSpeak's whenever the two differ -- so a build installed only to TeamSpeak
+# is silently reverted to stock the next time Arma starts. Writing the same
+# build to both keeps compare_file() satisfied and nothing gets copied.
 TS3_PLUGINS="$HOME/.steam/steam/steamapps/compatdata/107410/pfx/drive_c/users/steamuser/AppData/Roaming/TS3Client/plugins"
-if [[ "${1:-}" == "--install" ]]; then
-    [[ -d "$TS3_PLUGINS" ]] || { echo "TS3 plugin dir not found: $TS3_PLUGINS" >&2; exit 1; }
-    if [[ -f "$TS3_PLUGINS/acre2_win64.dll" && ! -f "$TS3_PLUGINS/acre2_win64.dll.stock" ]]; then
-        cp "$TS3_PLUGINS/acre2_win64.dll" "$TS3_PLUGINS/acre2_win64.dll.stock"
-        echo "backed up stock plugin -> acre2_win64.dll.stock"
+MOD_PLUGIN=$(find "$HOME/.steam/steam/steamapps/workshop/content/107410" \
+                  -maxdepth 2 -type d -name plugin 2>/dev/null | head -1)
+
+install_to() {
+    local dest="$1" label="$2"
+    [[ -d "$dest" ]] || { echo "  $label: not found at $dest" >&2; return 1; }
+    if [[ -f "$dest/acre2_win64.dll" && ! -f "$dest/acre2_win64.dll.stock" ]]; then
+        cp "$dest/acre2_win64.dll" "$dest/acre2_win64.dll.stock"
+        echo "  $label: backed up stock -> acre2_win64.dll.stock"
     fi
-    cp "$DLL" "$TS3_PLUGINS/acre2_win64.dll"
-    echo "installed to $TS3_PLUGINS/acre2_win64.dll"
-    echo "restore with: cp acre2_win64.dll.stock acre2_win64.dll"
+    cp "$DLL" "$dest/acre2_win64.dll"
+    echo "  $label: installed"
+}
+
+if [[ "${1:-}" == "--install" ]]; then
+    echo "installing:"
+    install_to "$TS3_PLUGINS" "TeamSpeak"
+    if [[ -n "$MOD_PLUGIN" ]]; then
+        install_to "$MOD_PLUGIN" "@acre2 mod"
+    else
+        echo "  @acre2 mod: plugin folder not found -- ACRE2Steam will revert" >&2
+        echo "  TeamSpeak's copy on the next Arma launch." >&2
+    fi
+    echo
+    echo "restore stock: cp acre2_win64.dll.stock acre2_win64.dll (in both folders)"
+elif [[ "${1:-}" == "--status" ]]; then
+    for d in "$TS3_PLUGINS" "$MOD_PLUGIN"; do
+        [[ -n "$d" && -f "$d/acre2_win64.dll" ]] || continue
+        info=$(x86_64-w64-mingw32-objdump -p "$d/acre2_win64.dll" 2>/dev/null || true)
+        if [[ "$info" == *api-ms-win-crt* ]]; then
+            echo "mingw build : $d"
+        else
+            echo "stock MSVC  : $d"
+        fi
+    done
 else
     echo
-    echo "run with --install to copy into the TeamSpeak plugin directory"
+    echo "run with --install to install, or --status to see what is installed"
 fi
