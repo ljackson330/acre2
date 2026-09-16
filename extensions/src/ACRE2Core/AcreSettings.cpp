@@ -52,7 +52,7 @@ acre::Result CAcreSettings::load(std::string filename) {
     this->m_DisableUnmuteClients = config.GetBoolean("acre2", "disableUnmuteClients", false);
     this->m_DisableTS3ChannelSwitch = config.GetBoolean("acre2", "disableTS3ChannelSwitch", false);
     this->m_AmbientEnabled = config.GetBoolean("acre2", "ambientEnabled", true);
-    this->m_AmbientVolume = (float)config.GetReal("acre2", "ambientVolume", 0.35f);
+    this->m_AmbientVolume = (float)config.GetReal("acre2", "ambientVolume", 0.26f);
     // -35 dBFS: measured as the point where foliage, waves and footsteps are
     // fully suppressed while combat still passes (see ambient/README.md).
     this->m_AmbientGateThreshold = (float)config.GetReal("acre2", "ambientGateThreshold", -35.0f);

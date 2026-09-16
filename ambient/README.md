@@ -226,7 +226,7 @@ once a second client is receiving, but it cannot show your own outgoing audio.
 | key | default | meaning |
 |---|---|---|
 | `ambientEnabled` | `true` | master switch |
-| `ambientVolume` | `0.35` | ambience level relative to voice |
+| `ambientVolume` | `0.26` | ambience level relative to voice |
 | `ambientGateThreshold` | `-35.0` | dBFS below which ambience is suppressed |
 | `ambientSelfTest` | `false` | capture for 8 s at startup and report to the log |
 | `ambientDumpSignalQuality` | `0.0` | above zero, run the dump through the receive-side radio DSP at this signal quality (0–1) |
@@ -261,7 +261,7 @@ change. When a dump path is picked up, capture start logs
 the setting was not loaded.
 
 `ambientVolume` is the one to try first. It started at 0.5, reasoned from the
-Phase 0 levels (combat at −23.7 dBFS RMS), and is now 0.35 — still a starting
+Phase 0 levels (combat at −23.7 dBFS RMS), and is now 0.26 — still a starting
 point rather than a measured optimum, which needs a real listener.
 
 ## Gate implementation verified against the Phase 0 takes
@@ -584,6 +584,69 @@ the way the plugin calls it". Beyond that:
   needs a real machine with it installed.
 - **BattlEye.** Unverifiable anywhere but a real install.
 - Tier B: Opus survival, receive-side radio DSP, `ambientVolume` tuning.
+
+# Ambient-bus DSP — mic model and compressor
+
+`ambient/ambient_dsp.py` implements two stages that belong on the **ambience
+only**, never the summed signal. They live in the helper rather than the plugin
+for exactly that reason — the helper carries Arma's audio and nothing else — and
+because tuning there costs a Python restart instead of a DLL rebuild plus a
+TeamSpeak restart.
+
+- `python3 ambient/ambient-helper.py --dsp` — live, in-game
+- `./ambient/dsp-preview.py <file> --compare -o out.wav` — offline A/B
+
+**Preview only on pure ambience** (`ambient/fight.flac`, `idle.flac`,
+`idle2.flac`). An `ambientDumpFile` recording is voice summed with ambience and
+has already been through the radio filter, so the mic model appears to do
+nothing and the compressor ducks the voice, which it never does in production.
+
+## The mic model earns its place on measurement, not realism alone
+
+Real tactical headsets use noise-cancelling pressure-gradient microphones, which
+reject the far field most strongly at low frequencies. So ambience reaching a
+real radio is high-passed.
+
+That happens to matter far more than it sounds, because of where the energy is:
+
+| take | <300 Hz | 300–750 | 750–4k | >4k |
+|---|---|---|---|---|
+| `fight` (pure ambience) | **76.3%** | 7.8% | 11.9% | 4.0% |
+| `idle2` rain (pure ambience) | **92.9%** | 3.1% | 3.2% | 0.8% |
+| a dump, post radio filter | 0.8% | 21.8% | 65.9% | 11.5% |
+
+ACRE2's receive filter high-passes at 750 Hz, so that low end is **discarded
+before anyone hears it** — after it has eaten headroom at the mix, driven
+`FilterRadio`'s 3× boost into foldback, and clipped. One of the demos peaks at
+0.0 dBFS. Removing it up front is close to inaudible in the result and buys back
+a lot of room: −11.3 dB RMS on `fight`, −8.8 on rain, but only **−1.7 on
+foliage and waves**, which is HF-rich and survives almost untouched. The quiet
+bed is the thing that stays.
+
+## The compressor, and where realism loses
+
+Threshold must sit **above the quiet bed and below the loud events**. Below the
+bed it is only an attenuator with extra steps — that mistake shows up as the
+whole signal dropping by the gain reduction, bed included.
+
+Post-high-pass on `fight`, the bed is −34.3 dBFS and the loud events −21.6, so
+−28 dB threshold. Holding that with 8:1 and a 1 ms attack, and sweeping release:
+
+| release | bed | loud events | spread |
+|---|---|---|---|
+| none | — | — | 12.8 dB |
+| **40 ms** | **−2.0 dB** | **−6.9 dB** | **7.8 dB** |
+| 150 ms | −4.5 | −8.2 | 9.1 |
+| 300 ms | −5.8 | −9.0 | 9.6 |
+| 600 ms | −7.1 | −9.6 | 10.3 |
+
+Monotonic, and it settles the VOGAD question. A real Voice-Operated Gain
+Adjusting Device has a slow release, and that is measurably **worse** here:
+sustained fire never gives it time to recover, so it holds the gain down through
+the quiet parts and ducks the bed by nearly as much as the gunfire. 40 ms keeps
+the bed while still taking 7 dB off the loud events.
+
+Realism is a good source of ideas here and a bad source of final values.
 
 # Picking this up again
 

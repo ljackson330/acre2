@@ -19,15 +19,25 @@ worth having. Idle cost is one read into a discard buffer.
 
 Wire format: signed 16-bit mono at 48 kHz, which is exactly what TeamSpeak's
 onEditCapturedVoiceDataEvent expects, so the plugin performs no conversion.
+
+With --dsp it also applies the ambient-bus DSP chain (see ambient_dsp.py) before
+sending. This stream carries Arma's audio and nothing else, so it is the correct
+and only place that chain can run without touching the player's voice -- and
+tuning it here needs a helper restart rather than a plugin rebuild and a
+TeamSpeak restart.
 """
 
 import argparse
+import pathlib
 import select
 import shutil
 import socket
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from ambient_dsp import add_dsp_arguments, chain_from_args
 
 DEFAULT_PORT = 47806
 RATE = 48000
@@ -82,7 +92,17 @@ def main():
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--target", help="PipeWire node serial (default: auto-detect Arma)")
     ap.add_argument("--latency", default="20ms")
+    add_dsp_arguments(ap)
     args = ap.parse_args()
+
+    chain = None
+    if args.dsp:
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            sys.exit("--dsp needs numpy: pip install numpy")
+        chain = chain_from_args(args, RATE)
+        log(f"ambient DSP enabled: {chain.describe()}")
 
     for tool in ("pw-record", "pactl"):
         if not shutil.which(tool):
@@ -97,6 +117,7 @@ def main():
     proc = None
     client = None
     sent = 0
+    carry = b""     # odd trailing byte when a read splits a sample
 
     try:
         while True:
@@ -135,6 +156,15 @@ def main():
                         proc = None
                         break
                     if client:
+                        if chain is not None:
+                            # Filter state is continuous across chunks, so a
+                            # sample must never be split across a process() call.
+                            import numpy as np
+                            buf = carry + data
+                            usable = len(buf) - (len(buf) % 2)
+                            carry = buf[usable:]
+                            pcm = np.frombuffer(buf[:usable], dtype="<i2")
+                            data = chain.process_int16(pcm).tobytes()
                         try:
                             client.sendall(data)
                             sent += len(data)
