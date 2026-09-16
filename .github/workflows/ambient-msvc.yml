@@ -1,0 +1,73 @@
+# Compile-check the ambient battle sound sources with MSVC and the real
+# Windows SDK.
+#
+# The local development build cross-compiles with mingw-w64 (ambient/build-mingw.sh),
+# which cannot catch MSVC-only breakage: different header sets, stricter two-phase
+# name lookup, and -- once the WASAPI capture source lands -- the actual
+# AUDIOCLIENT_ACTIVATION_PARAMS definitions, which mingw does not ship at all.
+#
+# Deliberately narrow. Upstream's full build (.github/workflows/release.yml) needs
+# the legacy DirectX SDK from IDI's private FTP, which this fork has no access to,
+# and FilterPosition.cpp is the only file that wants it. Compiling just the ambient
+# translation units answers the question we actually care about in about 90 seconds.
+#
+# Compile only, no link: unresolved externals from the rest of ACRE2Core are
+# expected and irrelevant here.
+
+name: ambient (MSVC)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'extensions/src/ACRE2Core/Ambient*'
+      - 'extensions/src/ACRE2Core/SoundEngine.cpp'
+      - 'extensions/src/ACRE2Core/AcreSettings.*'
+      - '.github/workflows/ambient-msvc.yml'
+
+concurrency:
+  group: ambient-msvc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Every ambient header must compile on its own. The pipeline is almost
+      # entirely header-only (gate, ring buffer, WAV writer), so a missing
+      # include in one of them would otherwise only surface in whichever .cpp
+      # happened to include something else first.
+      - name: Generate header self-containment check
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=extensions/src/ACRE2Core/ambient_header_check.cpp
+          : > "$out"
+          for h in extensions/src/ACRE2Core/Ambient*.h; do
+            echo "#include \"$(basename "$h")\"" >> "$out"
+          done
+          echo 'int main() { return 0; }' >> "$out"
+          cat "$out"
+
+      - name: Compile ambient translation units
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /c /EHsc /std:c++17 /W3 /D_CRT_SECURE_NO_WARNINGS ^
+             /Iextensions\src\ACRE2Core ^
+             /Iextensions\src\ACRE2Shared ^
+             /Iextensions\src ^
+             /Fo"%RUNNER_TEMP%\\" ^
+             extensions\src\ACRE2Core\Ambient*.cpp ^
+             extensions\src\ACRE2Core\ambient_header_check.cpp
+          if errorlevel 1 exit /b 1
+          echo Ambient sources compile clean under MSVC.

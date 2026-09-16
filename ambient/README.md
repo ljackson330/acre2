@@ -288,6 +288,58 @@ replacement that solo testing cannot reach.
 
 ---
 
+# The Windows port — development setup
+
+The Linux backend is feature complete. The remaining work is the Windows
+capture backend, and the obstacle is that neither available environment can run
+it: Proton does not implement `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`,
+and GitHub's Windows runners have no audio endpoint, so there is nothing for a
+render process to feed and nothing for a loopback capture to capture.
+
+A local Windows VM has both. **It does not need Arma.** What is unverified is
+the process-loopback API contract -- activation, the negotiated
+`WAVEFORMATEX`, PID scoping, and the resampler -- and all of that is provable
+against any process that renders audio. A tone generator stands in for the game.
+Whether Arma's own render stream captures cleanly is the part that still needs a
+real Windows machine and a second player.
+
+## What is set up
+
+**Nothing below has been exercised yet — the guest has never booted.** The
+Windows ISO is the one piece that cannot be automated, so the VM is staged but
+unbuilt, and `sync`, `install-vs` and the MSVC workflow are all unrun.
+
+
+- `ambient/vm.sh` drives the guest from the host shell: `up`, `status`, `ssh`,
+  `sync`, `install-vs`.
+- The VM lives in `~/VMs`, never in the repo -- the ISOs are several GB.
+  quickemu, not libvirt; `/dev/kvm` is world-accessible so no group change is
+  needed despite what quickemu's docs imply.
+- quickemu's generated `autounattend.xml` was patched to run `setup-ssh.ps1` at
+  first logon, which installs OpenSSH Server, sets PowerShell as the login
+  shell, and installs `~/.ssh/acre2-vm.pub` into
+  `administrators_authorized_keys`. Admin accounts read keys *only* from that
+  file, and sshd silently refuses it unless the ACL grants SYSTEM and
+  Administrators alone -- hence the `icacls` calls.
+- The guest gets an emulated `intel-hda` device (quickemu's default), which is
+  the whole reason this works where CI does not.
+- `.github/workflows/ambient-msvc.yml` compile-checks the ambient translation
+  units against the real Windows SDK on every push that touches them. It is
+  deliberately narrow: upstream's full build needs the legacy DirectX SDK from
+  IDI's private FTP, and `FilterPosition.cpp` is the only file that wants it.
+  Actions is free here because this fork is public.
+
+## Gotchas already paid for
+
+- **Microsoft IP-blocks `quickget`'s ISO download.** The Windows ISO has to be
+  fetched manually from a browser and saved to
+  `~/VMs/windows-11/windows-11.iso`. Everything else automates.
+- **Do not re-run `quickget` once assets are in place.** It deletes
+  `virtio-win.iso` before re-downloading, and then fails, leaving nothing.
+- **The virtio mirror is behind Anubis anti-bot** on the `stable-virtio` path.
+  The `archive-virtio/virtio-win-<version>-1/` path is not, and serves the same
+  ISO.
+
 # Picking this up again
 
 ## To get running
