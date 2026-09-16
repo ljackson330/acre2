@@ -63,6 +63,24 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
   when samples are modified or TeamSpeak discards them silently — it presents
   as broken capture while the mix works perfectly. Bit 2 arrives on input
   meaning "about to be sent". Stock ACRE2 never writes this parameter.
+- **The first key-up of a TeamSpeak session has no ambience, by design.** The
+  backend probe resolves on that transmission; the fallback applies from the
+  second onward. Selection deliberately never blocks, because `start()` runs on
+  the push-to-talk path. Not a bug — don't chase it.
+- **ACRE2 imports `X3DAudio1_7.dll`**, a legacy DirectX SDK redistributable
+  that is not part of Windows. Stock upstream imports it too, so anyone running
+  ACRE2 has it — but on a clean machine TeamSpeak just says "Failed to load
+  plugin" with no hint why.
+- **Windows audio is per-session, and SSH lands in session 0.** Anything
+  launched over SSH in the VM can neither render nor capture: it activates
+  happily and records permanent silence, which looks exactly like broken
+  capture. Use `schtasks /it` to run in the interactive session.
+- **`Stop-Process -Name powershell` over SSH kills the session's own shell**, so
+  everything after it silently never runs. Exclude `$PID`.
+- **`AmbientWasapi.{h,cpp}` must stay free of ACRE2 dependencies** (no `LOG`,
+  no settings) so `ambient/probe` can build it standalone. That property is what
+  makes the Windows capture path testable without TeamSpeak or Arma.
+
 - **`set -o pipefail` plus `grep -q` inverts a check** — grep exits on first
   match, the producer takes SIGPIPE, the pipeline returns non-zero. This
   silently disabled a guard in the build script. Capture output, then match.
@@ -72,6 +90,10 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
 Needs Arma running and producing audio; most of it cannot be verified from a
 terminal alone. Anything touching the audio path should be validated natively
 on Linux first where possible.
+
+A Windows 11 VM in `~/VMs`, driven by `./ambient/vm.sh`, exists for the WASAPI
+backend — Proton cannot run it and GitHub's runners have no audio endpoint, so
+it is the only place that path executes. It is not needed for day-to-day work.
 
 `./ambient/run-tests.sh` builds and runs the ring buffer and gate tests three
 ways — optimised, ASan+UBSan, and ThreadSanitizer. They are shared by both

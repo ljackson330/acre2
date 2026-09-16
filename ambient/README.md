@@ -587,50 +587,148 @@ the way the plugin calls it". Beyond that:
 
 # Picking this up again
 
+*Current as of 2026-09-16.*
+
+## Where this stands in one paragraph
+
+The feature works. Game audio is captured, gated, scaled and mixed into the
+outgoing TeamSpeak buffer pre-encode, on **both** backends: the Linux helper
+socket (used daily here, since Proton has no process loopback) and WASAPI
+process loopback (verified in a Windows VM, including inside a real TeamSpeak
+process). Everything downstream of the capture backend is shared between the
+two and covered by sanitizer tests in CI. What has never happened is a **second
+person on the other end of the radio**, and that is the only thing standing
+between here and done.
+
 ## To get running
 
 ```
 ./ambient/build-mingw.sh --status     # is the mingw build still installed?
-./ambient/build-mingw.sh --install    # if not, or after any code change
-python3 ambient/ambient-helper.py     # leave running; required or nothing captures
+./ambient/build-mingw.sh --install    # after any code change; writes BOTH locations
+python3 ambient/ambient-helper.py     # leave running, or nothing captures
+./ambient/run-tests.sh                # ring buffer + gate, under ASan/UBSan/TSan
 ```
 
-Then launch Arma + TeamSpeak via `~/Arma3Helper.sh`. Restart TeamSpeak after
-any `acre2.ini` change.
+Then launch Arma + TeamSpeak via `~/Arma3Helper.sh`. **Restart TeamSpeak after
+any `acre2.ini` change** — it is read once at plugin start.
 
-Healthy log lines during a transmission:
+`acre2.ini` lives at
+`…/compatdata/107410/pfx/drive_c/users/steamuser/AppData/Roaming/TS3Client/acre/acre2.ini`.
+The working demo configuration is:
 
 ```
-AMBIENT: capture started
-AMBIENT: dumping outgoing stream to <path>        (only if ambientDumpFile set)
-AMBIENT: capture callback format -- sampleCount=480 channels=1
+ambientVolume = 0.35;
+ambientGateThreshold = -35;
+ambientDumpFile = Z:\home\liam\acre2_demo.wav
+ambientDumpSignalQuality = 0.9;
+```
+
+Healthy log lines (`%LOCALAPPDATA%\Arma 3\acre2_plugin.log`, i.e. inside the
+prefix) during a transmission:
+
+```
+AMBIENT: capture started (helper socket)
+AMBIENT: dumping outgoing stream to <path>
+AMBIENT: dump will carry the receive-side radio effect at signal quality 0.90
 AMBIENT: mixed into N callbacks; mean ambient level -NN.N dBFS
-AMBIENT: capture stopped -- N bytes (N.NN s); ring: overruns=0 underruns=N skips=0
+AMBIENT: capture stopped -- N bytes; ring: overruns=0 underruns=N skips=0
 ```
 
-`helper not reachable` means the helper is down. `mixed into 0 callbacks` means
-capture ran but contributed nothing. Overruns or skips above zero mean the rates
-have drifted and the ring sizing needs revisiting — they were zero across every
-test so far.
+**The first key-up of a TeamSpeak session has no ambience, by design.** The
+backend probe resolves on that transmission and the fallback takes effect from
+the second onward. Do not chase it as a bug. `overruns` above zero is the
+number that would actually matter; it has been zero in every test.
 
-## Next step: Phase 4, needs a second player
+## What is proven, and by what
 
-Everything left requires someone on the other end of the radio:
+| claim | evidence |
+|---|---|
+| capture → gate → mix → transmit works on Linux | daily use; `acre2_demo.wav` records correctly post-refactor |
+| the same works on Windows via process loopback | VM, standalone probe and in-process self-test |
+| PID scoping cannot pick up the device mix | silent-process capture is bit-identical with and without another process blaring |
+| the engine hands us 48 kHz mono s16 as requested | probe reported the negotiated format; no resampler exists |
+| ring buffer and gate are race-free | ThreadSanitizer in CI, 3307 checks |
+| the plugin loads and initialises in real Windows TeamSpeak | VM, with DirectX runtime present |
 
-1. **Tune `ambientVolume`.** Currently `0.5`, reasoned from Phase 0 levels
-   (combat at -23.7 dBFS RMS) but never checked against a listener. This is the
-   first thing to adjust.
-2. **Check Opus survival.** Gunfire may fare badly through *Opus Voice* at low
-   quality. Try raising the channel codec quality or *Opus Music* before
-   blaming the mix.
-3. **Confirm the receive-side radio DSP** applies to the ambience. It should,
-   automatically, given the pre-encode injection point.
-4. **Confirm `onPluginCommandEvent` still works.** It is the only path touched
-   by the mingw assembly replacement that solo testing cannot reach. A broken
-   trampoline would show up as radio state not syncing between players.
+## What is left
+
+Everything remaining needs a second person. **There are two separate tests and
+they have very different costs.**
+
+### Test A — tuning. Needs nothing installed on their side.
+
+The mix is entirely transmitter-side (`onEditCapturedVoiceDataEvent`,
+pre-encode). The receive path is untouched stock ACRE2. So **you transmit from
+Linux and they listen on stock Workshop ACRE2** — no build to send, no GPLv3
+distribution, no BattlEye question, nothing for them to install or undo.
+
+This answers three of the four open questions:
+
+1. **Tune `ambientVolume`.** 0.35 now, reasoned rather than measured.
+2. **Opus survival.** Gunfire may fare badly through *Opus Voice* at low
+   quality. Raise the channel codec quality or try *Opus Music* before blaming
+   the mix.
+3. **Receive-side radio DSP applying to ambience.** Expected automatically
+   given the pre-encode injection point. `ambientDumpSignalQuality` simulates
+   it locally but cannot prove it.
+
+Also worth confirming in the same session: **`onPluginCommandEvent`**, the only
+path touched by the mingw assembly replacement that solo testing cannot reach.
+A broken trampoline shows up as radio state not syncing between players.
+
+### Test B — the Windows backend against real Arma. Needs a package.
+
+Optional, and not required for tuning. Only if you want the Windows capture
+path validated against the actual game. A ready-to-send zip is at
+`~/acre2-ambient-test.zip` (stripped 1.4 MB DLL, `ambient-probe.exe`, and
+instructions written for the tester). Rebuild it if the plugin changes.
+
+Two unknowns that no amount of local work can close:
+
+- **Does Arma render through the shared audio engine?** Process loopback
+  captured a PowerShell `SoundPlayer` perfectly, but a game engine may use a
+  different render path.
+- **BattlEye.** The plugin lives in `ts3client.exe` and never touches Arma's
+  memory, so the risk is low by construction, but it is unverified.
+
+Both fail cheaply: `ambient-probe.exe` answers the first in 30 seconds before
+anything is installed, and `ambientSelfTest = true` answers it again in one log
+line afterwards. Neither needs the tester in-game or you on a call.
+
+## The Windows VM
+
+Lives in `~/VMs` (outside the repo — the ISOs are several GB). Driven by
+`ambient/vm.sh`: `up`, `status`, `ssh`, `sync`, `install-vs`. Key is
+`~/.ssh/acre2-vm`, guest user `Quickemu`, SSH forwarded to `localhost:2222`.
+Windows 11 24H2 with VS Build Tools, the DirectX runtime, and a TeamSpeak 3
+client at `C:\TS3\TeamSpeak 3 Client` already installed.
+
+It is **not** needed for day-to-day work — only for touching the WASAPI
+backend. If you do:
+
+- Run anything audio-related through `schtasks /it`, never plain SSH. See the
+  per-session gotcha above; this is the single easiest way to waste an hour.
+- TeamSpeak there runs **portable**: config in `C:\TS3\TeamSpeak 3 Client\config\`,
+  plugins in `config\plugins\`, ini in `config\acre\`.
+- A renamed `powershell.exe` playing a WAV stands in for the game, because the
+  plugin looks its target up by name.
+
+## Architecture, briefly
+
+- `IAmbientSource` — the seam, and the only platform-specific part.
+  `CAmbientWasapiSource` (Windows, in-process) and `CAmbientSocketSource`
+  (Linux, reads `ambient-helper.py`). Selection is automatic: WASAPI is tried,
+  and on failure the helper takes over permanently for that session. Selection
+  **never blocks**, because `start()` runs on the push-to-talk path.
+- `CAmbientCapture` — everything shared: ring buffer, gate, dump, telemetry.
+- `AmbientWasapi.{h,cpp}` deliberately has **no ACRE2 dependencies**, so
+  `ambient/probe` can build it standalone. Keep it that way; that property is
+  what makes the capture path testable without TeamSpeak or Arma.
+- The mix site is `CSoundEngine::onEditCapturedVoiceDataEvent`, and it must set
+  `*edited |= 1` or TeamSpeak silently discards the modified samples.
 
 ## Deferred, per gameplan.md — nothing found so far argues for pulling these forward
 
 Supersonic crack, nearby direct-voice bleed, and ducking/AGC on the combined
-signal. The last one may become relevant if Phase 4 shows the mix clipping
+signal. The last may become relevant if Test A shows the mix clipping
 unpleasantly against the existing hard clip in `FilterRadio.cpp`.
