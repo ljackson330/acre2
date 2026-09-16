@@ -124,9 +124,14 @@ acre::Result CSoundEngine::onEditCapturedVoiceDataEvent(short* samples, int samp
 
         // Fixed storage: this is the audio path, so no allocation here.
         int16_t ambientBuffer[MAX_AMBIENT_SAMPLES];
+        int16_t ambientPreGate[MAX_AMBIENT_SAMPLES];
         const int frames = (sampleCount < MAX_AMBIENT_SAMPLES) ? sampleCount
                                                                : MAX_AMBIENT_SAMPLES;
-        const size_t produced = ambient->drain(ambientBuffer, frames);
+        const size_t produced = ambient->drain(ambientBuffer, frames, ambientPreGate);
+
+        // Before the sum, while the two signals can still be told apart. Does
+        // nothing unless ambientDumpSplitFile is set.
+        ambient->dumpSplit(ambientPreGate, samples, frames, channels);
 
         if (produced > 0) {
             const float volume = CAcreSettings::getInstance()->getAmbientVolume();

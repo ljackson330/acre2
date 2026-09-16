@@ -47,7 +47,24 @@ public:
      * so callers can mix unconditionally. Returns the number of real samples
      * produced.
      */
-    size_t drain(int16_t *out, size_t sampleCount);
+    size_t drain(int16_t *out, size_t sampleCount, int16_t *preGate = nullptr);
+
+    /*
+     * Diagnostic: writes ambience and microphone to separate channels of a
+     * stereo file, both captured before they are summed.
+     *
+     * The mixed dump proves what gets transmitted but is useless for trying a
+     * different DSP chain, because the two signals cannot be pulled apart
+     * again. This one keeps them separate and time-aligned, so a chain can be
+     * tried offline against real gameplay instead of against the Phase 0 takes.
+     *
+     * The ambience channel is taken before the noise gate, so gate settings can
+     * be varied offline too. Run the helper with --no-dsp when recording
+     * material for this, or its chain is baked in before the plugin ever sees
+     * the audio.
+     */
+    void dumpSplit(const int16_t *ambient, const short *voice,
+                   int sampleCount, int channels);
 
     // Records the real callback geometry once per transmission, to confirm
     // what TeamSpeak actually hands us rather than what the docs promise.
@@ -115,6 +132,7 @@ private:
     // each transmission and its threshold is resolved once, not per callback.
     CAmbientGate m_gate;
     CAmbientWavWriter m_dump;
+    CAmbientWavWriter m_splitDump;
     // Rebuilt per transmission so its filter and noise state start clean.
     std::unique_ptr<CRadioEffect> m_dumpRadio;
     std::atomic<uint32_t> m_mixedCallbacks{0};

@@ -106,6 +106,26 @@ combat is elsewhere on the server.
    passing the gate is the same principle — a real operator transmitting in a
    rainstorm would sound like it.
 
+## Realism is a heuristic here, not a goal
+
+The ambient chain borrows real mechanisms -- a noise-cancelling microphone
+model, a VOGAD-style compressor -- but it is sound design, not simulation, and
+the documentation should not let the vocabulary imply otherwise. The high-pass
+is twice as steep as a real gradient mic and has no rejection floor; the
+compressor sits on ambience alone where a real VOGAD sits on the combined mic
+signal; the noise gate silences ambience while voice continues, which one
+microphone cannot do; and the whole two-bus architecture replaces a ratio that
+physics would otherwise set.
+
+This is deliberate. Realism earned its place by producing the single most
+valuable change -- the mic model, which turned out to be removing energy the
+receive filter discards anyway -- and lost an argument on measurement when the
+authentic slow VOGAD release proved worse for keeping a quiet bed audible.
+
+**The rule: realism is a source of ideas, not of values.** Take the idea,
+measure the result, and keep whichever setting sounds better. `ambient/README.md`
+carries the full audit and the ranked list of what would actually move closer.
+
 ## Deferred — do not build without asking
 
 - **Supersonic crack / near-miss audio.** Out of scope entirely.

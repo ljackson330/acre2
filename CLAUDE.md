@@ -64,6 +64,14 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
   when samples are modified or TeamSpeak discards them silently — it presents
   as broken capture while the mix works perfectly. Bit 2 arrives on input
   meaning "about to be sent". Stock ACRE2 never writes this parameter.
+- **`ambientDumpSplitFile` records ambience and microphone to separate stereo
+  channels**, taken before they are summed and before the gate, for trying DSP
+  offline against real gameplay. Record with the helper on `--no-dsp` or its
+  chain is baked in first. Diagnostic only; never reaches the transmitted stream.
+- **The ambient DSP is sound design, not simulation.** The names are borrowed
+  from real hardware and the values are not. See the reality check in
+  `ambient/README.md` before treating any of it as accurate.
+
 - **The ambient DSP lives in `ambient-helper.py`, so it is Linux-only.** The
   Windows WASAPI backend captures in-process and never touches the helper, which
   means a Windows transmitter gets raw, untuned ambience. Porting the chain to

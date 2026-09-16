@@ -150,17 +150,26 @@ void CAmbientCapture::selfTest() {
 
 void CAmbientCapture::openDumpFile() {
     const std::string dumpPath = CAcreSettings::getInstance()->getAmbientDumpFile();
-    if (dumpPath.empty()) {
-        return;
+    if (!dumpPath.empty()) {
+        if (this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
+            LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
+        } else {
+            LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
+        }
     }
-    if (!this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
-        LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
-        return;
+
+    const std::string splitPath = CAcreSettings::getInstance()->getAmbientDumpSplitFile();
+    if (!splitPath.empty()) {
+        if (this->m_splitDump.open(splitPath, (uint32_t)SAMPLE_RATE, 2)) {
+            LOG("AMBIENT: split dump to %s -- left is ambience before the gate, "
+                "right is the microphone before mixing", splitPath.c_str());
+        } else {
+            LOG("AMBIENT: could not open split dump %s", splitPath.c_str());
+        }
     }
-    LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
 
     const float quality = CAcreSettings::getInstance()->getAmbientDumpSignalQuality();
-    if (quality > 0.0f) {
+    if (quality > 0.0f && this->m_dump.isOpen()) {
         this->m_dumpRadio.reset(new CRadioEffect());
         this->m_dumpRadio->setParam("signalQuality", quality);
         LOG("AMBIENT: dump will carry the receive-side radio effect at signal "
@@ -188,6 +197,12 @@ void CAmbientCapture::stop() {
         LOG("AMBIENT: mixed into 0 callbacks -- nothing was added to the outgoing stream");
     }
 
+    if (this->m_splitDump.isOpen()) {
+        const uint32_t split = this->m_splitDump.bytesWritten();
+        this->m_splitDump.close();
+        LOG("AMBIENT: split dump closed -- %.2f s written", split / 4.0 / SAMPLE_RATE);
+    }
+
     if (this->m_dump.isOpen()) {
         const uint32_t dumped = this->m_dump.bytesWritten();
         this->m_dump.close();
@@ -202,12 +217,20 @@ void CAmbientCapture::stop() {
         this->m_ring.skipped(), this->m_ring.fill());
 }
 
-size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
+size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount, int16_t *preGate) {
     if (!this->isRunning()) {
         memset(out, 0x00, sampleCount * sizeof(int16_t));
+        if (preGate != nullptr) {
+            memset(preGate, 0x00, sampleCount * sizeof(int16_t));
+        }
         return 0;
     }
     const size_t produced = this->m_ring.read(out, sampleCount);
+    // Copied before gating so a diagnostic dump can carry ungated ambience and
+    // gate settings stay adjustable offline.
+    if (preGate != nullptr) {
+        memcpy(preGate, out, sampleCount * sizeof(int16_t));
+    }
     if (produced > 0) {
         // Gate only the real samples. read() zero-fills any shortfall, and
         // including that tail would drag the window RMS down and close the
@@ -268,5 +291,32 @@ void CAmbientCapture::dumpOutgoing(const short *samples, int sampleCount, int ch
             this->m_dumpRadio->process(mono, frames);
         }
         this->m_dump.write(mono, frames);
+    }
+}
+
+void CAmbientCapture::dumpSplit(const int16_t *ambient, const short *voice,
+                                int sampleCount, int channels) {
+    if (!this->m_splitDump.isOpen() || channels <= 0 || sampleCount <= 0) {
+        return;
+    }
+
+    constexpr int MAX_CHUNK = 2048;
+    int16_t interleaved[MAX_CHUNK * 2];
+
+    for (int offset = 0; offset < sampleCount; offset += MAX_CHUNK) {
+        const int remaining = sampleCount - offset;
+        const int frames = (remaining < MAX_CHUNK) ? remaining : MAX_CHUNK;
+
+        for (int frame = 0; frame < frames; ++frame) {
+            // Voice is downmixed to match the ambience, which is always mono.
+            int32_t sum = 0;
+            const int base = (offset + frame) * channels;
+            for (int channel = 0; channel < channels; ++channel) {
+                sum += voice[base + channel];
+            }
+            interleaved[(frame * 2)] = ambient[offset + frame];
+            interleaved[(frame * 2) + 1] = static_cast<int16_t>(sum / channels);
+        }
+        this->m_splitDump.write(interleaved, (size_t)frames * 2);
     }
 }

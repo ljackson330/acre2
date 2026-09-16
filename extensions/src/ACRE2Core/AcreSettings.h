@@ -45,6 +45,11 @@ public:
     // radio DSP a listener's client applies, at this signal quality (0..1), so
     // a demo sounds like what is heard rather than what is sent.
     DECLARE_MEMBER(float, AmbientDumpSignalQuality);
+    // Absolute path; empty disables. Writes a stereo file with the ambience on
+    // the left and the microphone on the right, both taken before they are
+    // summed, so DSP can be tried offline against real material. Diagnostic
+    // only -- it is not part of what gets transmitted.
+    DECLARE_MEMBER(std::string, AmbientDumpSplitFile);
     // Diagnostic: run a short capture at plugin start and report the result to
     // the log, so a tester can confirm the capture backend works without
     // getting in-game and keying a radio.

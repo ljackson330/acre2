@@ -25,6 +25,7 @@ acre::Result CAcreSettings::save(std::string filename) {
     // No trailing ';' here: this parser only treats ';' as a comment when
     // preceded by whitespace, so it would be read back as part of the path.
     iniFile << "ambientDumpFile = " << this->m_AmbientDumpFile << "\n";
+    iniFile << "ambientDumpSplitFile = " << this->m_AmbientDumpSplitFile << "\n";
 
     //LOG("Config Save: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);
     iniFile.flush();
@@ -60,10 +61,16 @@ acre::Result CAcreSettings::load(std::string filename) {
     this->m_AmbientDumpSignalQuality =
         (float)config.GetReal("acre2", "ambientDumpSignalQuality", 0.0f);
     this->m_AmbientDumpFile = config.Get("acre2", "ambientDumpFile", "");
+    this->m_AmbientDumpSplitFile = config.Get("acre2", "ambientDumpSplitFile", "");
     while (!this->m_AmbientDumpFile.empty()
            && (this->m_AmbientDumpFile.back() == ';'
                || this->m_AmbientDumpFile.back() == ' ')) {
         this->m_AmbientDumpFile.pop_back();
+    }
+    while (!this->m_AmbientDumpSplitFile.empty()
+           && (this->m_AmbientDumpSplitFile.back() == ';'
+               || this->m_AmbientDumpSplitFile.back() == ' ')) {
+        this->m_AmbientDumpSplitFile.pop_back();
     }
 
     //LOG("Config Load: %f,%f", m_GlobalVolume, m_PremixGlobalVolume);

@@ -691,6 +691,97 @@ the bed while still taking 7 dB off the loud events.
 
 Realism is a good source of ideas here and a bad source of final values.
 
+## Recording ambience and voice separately, for offline A/B
+
+`ambientDumpSplitFile` writes a **stereo** file with ambience on the left and
+the microphone on the right, both captured at the mix site before they are
+summed. The mixed dump proves what gets transmitted but is useless for trying a
+different chain, because the two signals cannot be pulled apart again.
+
+```
+ambientDumpSplitFile = Z:\home\liam\acre2_split.wav
+```
+
+The ambience channel is taken **before the noise gate**, so gate settings can be
+varied offline too. Two things to know:
+
+- **Run the helper with `--no-dsp` when recording material for this**, or its
+  chain is already baked in before the plugin sees the audio and you are A/Bing
+  on top of a processed signal.
+- It is diagnostic only. Nothing about it reaches the transmitted stream, and it
+  is off unless the path is set.
+
+That gives real gameplay — a Huey, a firefight, whatever — as two aligned
+tracks, which is a much better test bed than the Phase 0 takes for anything
+involving how ambience sits against speech.
+
+## Reality check: how close is any of this to a real radio?
+
+Honest answer: **it is sound design that borrows real mechanisms, not
+simulation.** Worth writing down so nobody later mistakes the vocabulary for
+accuracy.
+
+**Where it diverges, stage by stage:**
+
+- **The high-pass has the right mechanism and the wrong numbers.** A real
+  pressure-gradient mic rolls far-field sound off at about **6 dB/octave**, and
+  its rejection is **finite** -- typically 10-20 dB. Ours is a 12 dB/oct
+  Butterworth heading to −∞. Twice as steep as physics, with no floor.
+- **The compressor is not a VOGAD.** A real one sits on the *combined* mic
+  signal, so a gunshot ducks the operator's voice; ours is ambience-only and
+  never does. Real release is 0.5-3 s against our 40 ms, and a VOGAD targets
+  constant average modulation rather than following a threshold/ratio curve.
+  Functionally ours is a modern broadcast limiter wearing a military name.
+- **Makeup and `ambientVolume` have no physical analogue at all.**
+- **The gate is actively unphysical.** It silences quiet ambience while the
+  voice continues, which one microphone cannot do.
+
+**The architectural unreality underneath all of it:** a real radio has one mic
+producing one signal, and the voice-to-ambience ratio is set by physics --
+distance, polar pattern, actual SPL. We have two independent signals and choose
+the ratio. Every level decision here synthesises something physics would
+otherwise dictate.
+
+**What is not modelled at all:** microphone capsule and preamp overload, which
+is probably the most characteristic sound of transmitting beside a weapon; the
+2-4 kHz presence peak comms mics have for intelligibility; helmet and headset
+attenuation ahead of the mic; mechanical coupling, wind and handling noise;
+vocoder mangling (real tactical digital radios use MELPe/AMBE, which force audio
+through a vocal-tract model and garble non-speech far worse than Opus does);
+FM pre/de-emphasis, squelch tails and PTT clicks.
+
+**And the thing underneath is stylised too**, which caps how much realism is
+even meaningful. ACRE2's `FilterRadio` passes 750-4000 Hz where real narrowband
+voice is roughly 300-3400, so it is thinner than reality. Its ring modulation is
+not a radio artifact -- analog degradation is noise, fading and multipath, and
+digital is vocoder warble and packet loss. Its foldback is a waveshaper choice,
+not overmodulation behaviour.
+
+### If realism is ever worth chasing further
+
+Ranked by payoff against effort:
+
+1. **A low-shelf instead of the high-pass** -- roughly 15 dB of cut below
+   300 Hz rather than a true filter. More accurate *and* it gives back some
+   rotor character, which the current filter removes entirely. Cheapest real
+   improvement available.
+2. **Soft saturation before the compressor**, modelling mic overload on
+   transients, so close gunfire sounds mic-slammed rather than merely loud.
+3. **Sidechain duck from the voice.** Not literally what a single mic does, but
+   it produces the outcome a single mic produces -- the near source dominating
+   the far one.
+
+### The caveat that matters most
+
+**Realism has already been wrong here once, measurably.** The authentic slow
+VOGAD release made the thing being optimised for worse, and the measurement
+said so plainly. Realism has been an excellent source of *ideas* -- the mic
+model came from it and was the single most valuable change -- and an unreliable
+source of *values*.
+
+The working rule: chase realism where it happens to produce fun, and drop it the
+moment the numbers disagree.
+
 ## The DSP is Linux-only, and that matters for the friend test
 
 The chain lives in `ambient-helper.py`, which **only the Linux backend uses**.
