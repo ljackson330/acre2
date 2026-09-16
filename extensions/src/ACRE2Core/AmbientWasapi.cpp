@@ -30,12 +30,6 @@ public:
         this->m_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
 
-    ~CActivationHandler() {
-        if (this->m_event != nullptr) {
-            CloseHandle(this->m_event);
-        }
-    }
-
     HANDLE event() const { return this->m_event; }
 
     STDMETHODIMP ActivateCompleted(IActivateAudioInterfaceAsyncOperation *) override {
@@ -61,13 +55,40 @@ public:
         return S_OK;
     }
 
-    // Deliberately not reference-counted into destruction: the handler lives on
-    // the capture thread's stack for the whole activation, which outlives every
-    // reference the audio engine can hold.
-    STDMETHODIMP_(ULONG) AddRef() override { return 2; }
-    STDMETHODIMP_(ULONG) Release() override { return 1; }
+    /*
+     * Really reference-counted, and heap-allocated as a result.
+     *
+     * The obvious shortcut -- a stack object returning constants from AddRef
+     * and Release, as Microsoft's ApplicationLoopback sample does -- is unsafe
+     * here. The audio engine can still hold a reference briefly after
+     * GetActivateResult returns, and this object owns the wait event, so a
+     * stack instance would destruct at function exit and the engine would call
+     * into freed stack and a closed handle. That presents as an intermittent
+     * crash inside ts3client.exe, which is precisely the failure mode worth
+     * spending ten lines to avoid.
+     */
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return this->m_refCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG remaining = this->m_refCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
 
 private:
+    // Virtual because Release() does `delete this` on a polymorphic type.
+    // Private so the only way to destroy it is by dropping the last reference.
+    virtual ~CActivationHandler() {
+        if (this->m_event != nullptr) {
+            CloseHandle(this->m_event);
+        }
+    }
+
+    std::atomic<ULONG> m_refCount{1};
     HANDLE m_event = nullptr;
 };
 
@@ -214,29 +235,34 @@ bool CAmbientWasapiSource::activateClient(DWORD targetPid, IAudioClient **outCli
     activateParams.blob.cbSize = sizeof(params);
     activateParams.blob.pBlobData = reinterpret_cast<BYTE *>(&params);
 
-    CActivationHandler handler;
-    if (handler.event() == nullptr) {
+    CActivationHandler *handler = new CActivationHandler();
+    if (handler->event() == nullptr) {
         this->fail("could not create activation event", S_OK);
+        handler->Release();
         return false;
     }
 
     IActivateAudioInterfaceAsyncOperation *operation = nullptr;
     HRESULT hr = ActivateAudioInterfaceAsync(
         VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient),
-        &activateParams, &handler, &operation);
+        &activateParams, handler, &operation);
     if (FAILED(hr)) {
         this->fail("ActivateAudioInterfaceAsync failed", hr);
+        handler->Release();
         return false;
     }
 
     // Bounded, always. Proton exports this function but has no process-loopback
     // device behind it, so on a Wine host the completion may never arrive -- and
     // an unbounded wait there would be indistinguishable from a hang.
-    const DWORD waited = WaitForSingleObject(handler.event(), ACTIVATE_TIMEOUT_MS);
+    const DWORD waited = WaitForSingleObject(handler->event(), ACTIVATE_TIMEOUT_MS);
     if (waited != WAIT_OBJECT_0) {
         if (operation != nullptr) {
             operation->Release();
         }
+        // Dropping our reference here does not free the handler if the engine
+        // still holds one -- which is the whole point of refcounting it.
+        handler->Release();
         this->fail("activation did not complete within "
                    + std::to_string(ACTIVATE_TIMEOUT_MS) + " ms", S_OK);
         return false;
@@ -246,6 +272,7 @@ bool CAmbientWasapiSource::activateClient(DWORD targetPid, IAudioClient **outCli
     IUnknown *unknown = nullptr;
     hr = operation->GetActivateResult(&activateResult, &unknown);
     operation->Release();
+    handler->Release();
 
     if (FAILED(hr)) {
         this->fail("GetActivateResult failed", hr);
@@ -334,7 +361,11 @@ void CAmbientWasapiSource::captureThread(DWORD targetPid) {
 
     this->m_running.store(true, std::memory_order_release);
 
-    while (!this->m_stopRequested.load(std::memory_order_acquire)) {
+    // A failure inside the loop must leave it. Without the m_failed check a
+    // persistent GetBuffer error would spin here at 500 ms intervals, calling
+    // fail() forever and overwriting the first, most useful error message.
+    while (!this->m_stopRequested.load(std::memory_order_acquire)
+           && !this->m_failed.load(std::memory_order_acquire)) {
         // A silent target renders nothing, so a timeout here is normal rather
         // than an error -- loop and re-check the stop flag.
         if (WaitForSingleObject(bufferEvent, 500) != WAIT_OBJECT_0) {
