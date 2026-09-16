@@ -1,9 +1,10 @@
 #include "AmbientCapture.h"
 
 #include "AcreSettings.h"
+#include "AmbientSocketSource.h"
+#include "AmbientWasapi.h"
 #include "Log.h"
 
-#include <chrono>
 #include <cmath>
 
 CAmbientCapture *CAmbientCapture::getInstance() {
@@ -15,143 +16,103 @@ CAmbientCapture::~CAmbientCapture() {
     this->stop();
 }
 
+bool CAmbientCapture::isRunning() const {
+    return this->m_source && this->m_source->isRunning();
+}
+
 /*
- * Connect to the helper without ever blocking the caller for long.
+ * Choose a backend, without ever waiting for one.
  *
- * start() runs on the RPC thread that handles startRadioSpeaking, which is in
- * the player's push-to-talk path. A blocking connect to a helper that is not
- * running would stall their PTT, so the socket is put in non-blocking mode and
- * given a short bounded window via select().
+ * WASAPI process loopback is the real Windows path and is tried first. Under
+ * Wine it fails -- Proton exports ActivateAudioInterfaceAsync but has no
+ * process-loopback device behind it -- and the helper socket takes over, so the
+ * same binary serves both a Windows player and this development setup with no
+ * build flag or setting to get wrong.
+ *
+ * Crucially this does not probe and wait. start() runs on the RPC thread that
+ * handles startRadioSpeaking, which is in the player's push-to-talk path, and
+ * blocking there for the second or so a doomed activation takes would stall
+ * their transmission -- the very thing connectToHelper()'s bounded select()
+ * exists to avoid. Instead the WASAPI source is simply started, activation
+ * resolves on its own thread, and the *next* key-up sees the verdict. The cost
+ * is that the first transmission of a session has no ambience on Linux, which
+ * is a far better trade than a stalled PTT.
  */
-bool CAmbientCapture::connectToHelper() {
-    // Winsock is refcounted per process. The TeamSpeak client has certainly
-    // initialised it already, but relying on a host's internals is fragile and
-    // a second startup is cheap.
-    if (!this->m_wsaReady) {
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            LOG("AMBIENT: WSAStartup failed -- ambient sound unavailable");
-            return false;
+IAmbientSource *CAmbientCapture::resolveSource() {
+    if (!this->m_source) {
+        const size_t instances =
+            CAmbientWasapiSource::countProcesses(CAmbientWasapiSource::GAME_EXECUTABLE);
+        if (instances > 1) {
+            // Two instances is a test setup, not normal play. The backend takes
+            // the lowest PID, which is a guess, so say so rather than letting it
+            // look deliberate.
+            LOG("AMBIENT: %zu arma3_x64.exe processes running -- capturing the "
+                "lowest PID, which may not be the instance you are playing",
+                instances);
         }
-        this->m_wsaReady = true;
+        this->m_source.reset(new CAmbientWasapiSource());
+        return this->m_source.get();
     }
 
-    this->m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (this->m_socket == INVALID_SOCKET) {
-        LOG("AMBIENT: socket() failed: %d", WSAGetLastError());
-        return false;
+    // Process loopback gets tried once per session. Once it has definitively
+    // failed, fall back permanently rather than paying a failed activation on
+    // every single key-up.
+    if (!this->m_fellBack && this->m_source->hasFailed()) {
+        LOG("AMBIENT: %s unavailable (%s) -- using the helper from now on",
+            this->m_source->name(), this->m_source->lastError().c_str());
+        this->m_source->stop();
+        this->m_source.reset(new CAmbientSocketSource());
+        this->m_fellBack = true;
     }
 
-    u_long nonBlocking = 1;
-    ioctlsocket(this->m_socket, FIONBIO, &nonBlocking);
-
-    struct sockaddr_in addr;
-    memset(&addr, 0x00, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(HELPER_PORT);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-    connect(this->m_socket, (struct sockaddr *)&addr, sizeof(addr));
-
-    fd_set writeSet;
-    FD_ZERO(&writeSet);
-    FD_SET(this->m_socket, &writeSet);
-
-    struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = CONNECT_TIMEOUT_MS * 1000;
-
-    if (select(0, NULL, &writeSet, NULL, &timeout) <= 0) {
-        LOG("AMBIENT: helper not reachable on port %d -- ambient sound disabled "
-            "for this transmission", HELPER_PORT);
-        closesocket(this->m_socket);
-        this->m_socket = INVALID_SOCKET;
-        return false;
-    }
-
-    // select() reporting writable does not by itself mean the connect
-    // succeeded; a refused connection also becomes writable.
-    int soError = 0;
-    int soErrorLen = sizeof(soError);
-    if (getsockopt(this->m_socket, SOL_SOCKET, SO_ERROR, (char *)&soError, &soErrorLen) != 0
-        || soError != 0) {
-        LOG("AMBIENT: connect refused (%d) -- is ambient-helper.py running?", soError);
-        closesocket(this->m_socket);
-        this->m_socket = INVALID_SOCKET;
-        return false;
-    }
-
-    u_long blocking = 0;
-    ioctlsocket(this->m_socket, FIONBIO, &blocking);
-
-    // Bound recv() so the reader thread cannot wedge if the helper stops
-    // sending without closing the socket.
-    DWORD recvTimeout = 500;
-    setsockopt(this->m_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&recvTimeout, sizeof(recvTimeout));
-
-    return true;
+    return this->m_source.get();
 }
 
 void CAmbientCapture::start() {
-    if (this->m_running.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    // Join a previous thread that has exited on its own (helper went away).
-    if (this->m_thread.joinable()) {
-        this->m_thread.join();
-    }
-
-    if (!this->connectToHelper()) {
-        return;  // fail soft: no ambient audio, voice path untouched
-    }
-
-    this->m_bytesThisSession.store(0, std::memory_order_release);
+    // Reset the pipeline before the source can deliver into it.
     this->m_ring.reset();
     this->m_gate.reset();
     this->m_gate.setThresholdDb(CAcreSettings::getInstance()->getAmbientGateThreshold());
     this->m_mixedCallbacks.store(0, std::memory_order_release);
     this->m_ambientRmsSum.store(0.0, std::memory_order_release);
-
-    const std::string dumpPath = CAcreSettings::getInstance()->getAmbientDumpFile();
-    if (!dumpPath.empty()) {
-        if (this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
-            LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
-        } else {
-            LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
-        }
-    }
     this->m_formatLogged.store(false, std::memory_order_release);
-    this->m_running.store(true, std::memory_order_release);
-    this->m_thread = std::thread(&CAmbientCapture::readLoop, this);
 
-    LOG("AMBIENT: capture started");
-}
-
-void CAmbientCapture::stop() {
-    // Do not gate on m_running: readLoop clears it when the helper goes away,
-    // and in that case there is still a thread to join and a socket to close.
-    const bool hadSession = this->m_thread.joinable() || this->m_socket != INVALID_SOCKET;
-    if (!hadSession) {
+    IAmbientSource *source = this->resolveSource();
+    if (source == nullptr) {
         return;
     }
 
-    this->m_running.store(false, std::memory_order_release);
+    auto sink = [this](const int16_t *samples, size_t count) {
+        this->m_ring.write(samples, count);
+    };
 
-    // Shut the socket down first so a blocked recv() returns promptly rather
-    // than waiting out its timeout.
-    if (this->m_socket != INVALID_SOCKET) {
-        shutdown(this->m_socket, SD_BOTH);
+    if (!source->start(sink)) {
+        return;  // fail soft: no ambient audio, voice path untouched
     }
 
-    if (this->m_thread.joinable()) {
-        this->m_thread.join();
+    this->openDumpFile();
+    LOG("AMBIENT: capture started (%s)", source->name());
+}
+
+void CAmbientCapture::openDumpFile() {
+    const std::string dumpPath = CAcreSettings::getInstance()->getAmbientDumpFile();
+    if (dumpPath.empty()) {
+        return;
+    }
+    if (this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
+        LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
+    } else {
+        LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
+    }
+}
+
+void CAmbientCapture::stop() {
+    if (!this->m_source) {
+        return;
     }
 
-    if (this->m_socket != INVALID_SOCKET) {
-        closesocket(this->m_socket);
-        this->m_socket = INVALID_SOCKET;
-    }
+    const uint64_t bytes = this->m_source->bytesDelivered();
+    this->m_source->stop();
 
     const uint32_t mixed = this->m_mixedCallbacks.load(std::memory_order_acquire);
     if (mixed > 0) {
@@ -168,7 +129,6 @@ void CAmbientCapture::stop() {
         LOG("AMBIENT: dump closed -- %.2f s written", dumped / 2.0 / SAMPLE_RATE);
     }
 
-    const uint64_t bytes = this->m_bytesThisSession.load(std::memory_order_acquire);
     LOG("AMBIENT: capture stopped -- %llu bytes (%.2f s of audio); "
         "ring: overruns=%u underruns=%u skips=%u residual=%zu samples",
         (unsigned long long)bytes, bytes / 2.0 / SAMPLE_RATE,
@@ -176,57 +136,8 @@ void CAmbientCapture::stop() {
         this->m_ring.skipped(), this->m_ring.fill());
 }
 
-void CAmbientCapture::readLoop() {
-    // Wire format is signed 16-bit mono at 48 kHz: already exactly what
-    // onEditCapturedVoiceDataEvent expects, so there is nothing to convert.
-    // Aligned for the int16_t reinterpret below.
-    alignas(int16_t) char buffer[4096];
-    int carry = 0;  // trailing byte of a sample split across two recv() calls
-
-    while (this->m_running.load(std::memory_order_acquire)) {
-        const int received = recv(this->m_socket, buffer + carry,
-                                  sizeof(buffer) - carry, 0);
-
-        if (received > 0) {
-            this->m_bytesThisSession.fetch_add(received, std::memory_order_relaxed);
-            // recv() can split a sample across reads; carry the odd byte over.
-            const int total = carry + received;
-            this->m_ring.write(reinterpret_cast<const int16_t *>(buffer),
-                               total / 2);
-            if (total & 1) {
-                buffer[0] = buffer[total - 1];
-                carry = 1;
-            } else {
-                carry = 0;
-            }
-            continue;
-        }
-
-        if (received == 0) {
-            // stop() shuts the socket down to unblock this recv, which also
-            // returns 0 -- so only an orderly close while we still expected
-            // audio means the helper actually went away.
-            if (this->m_running.load(std::memory_order_acquire)) {
-                LOG("AMBIENT: helper closed the connection");
-            }
-            break;
-        }
-
-        const int err = WSAGetLastError();
-        if (err == WSAETIMEDOUT) {
-            continue;  // no audio yet; keep waiting
-        }
-        if (this->m_running.load(std::memory_order_acquire)) {
-            LOG("AMBIENT: recv failed: %d", err);
-        }
-        break;
-    }
-
-    this->m_running.store(false, std::memory_order_release);
-}
-
 size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
-    if (!this->m_running.load(std::memory_order_acquire)) {
+    if (!this->isRunning()) {
         memset(out, 0x00, sampleCount * sizeof(int16_t));
         return 0;
     }
@@ -243,7 +154,7 @@ size_t CAmbientCapture::drain(int16_t *out, size_t sampleCount) {
 void CAmbientCapture::logFormatOnce(int sampleCount, int channels) {
     if (!this->m_formatLogged.exchange(true, std::memory_order_acq_rel)) {
         LOG("AMBIENT: capture callback format -- sampleCount=%d channels=%d "
-            "(helper supplies mono 48 kHz)", sampleCount, channels);
+            "(backend supplies mono 48 kHz)", sampleCount, channels);
     }
 }
 

@@ -2,31 +2,30 @@
 
 #include "compat.h"
 #include "AmbientGate.h"
-#include "AmbientWavWriter.h"
 #include "AmbientRingBuffer.h"
+#include "AmbientSource.h"
+#include "AmbientWavWriter.h"
 
 #include <atomic>
-#include <thread>
+#include <memory>
 
 /*
- * Ambient battle sound capture client.
+ * Ambient battle sound: the pipeline between a capture backend and the
+ * outgoing voice stream.
  *
- * Reads the local game's audio from the ambient-helper process over a loopback
- * socket and makes it available to the outgoing voice path, so listeners hear
- * the transmitter's combat environment.
- *
- * Capture is scoped to Arma's own process on the helper side, never the output
- * device, so radio audio this client is receiving -- which plays through the
- * TeamSpeak process -- cannot be picked up and re-transmitted.
+ * Owns everything that is not platform-specific -- the ring buffer, the noise
+ * gate, the dump file and the per-transmission telemetry -- and holds an
+ * IAmbientSource for the part that is. The source is chosen once and reused:
+ * WASAPI process loopback where it works, the Linux helper socket otherwise.
  *
  * Lifetime is tied to transmission: start() on startRadioSpeaking, stop() on
- * stopRadioSpeaking. The helper keeps its capture stream open and discards
- * samples while nothing is connected, so connecting is cheap.
+ * stopRadioSpeaking. Capture therefore only runs during actual transmission
+ * windows, which are short and infrequent regardless of how much is happening
+ * elsewhere on the server.
  *
- * Every failure path is soft. If the helper is not running, or the connection
- * drops, the feature disables itself and the outgoing voice path is left
- * exactly as it would be without this class. A missing helper must never cost
- * the player their microphone.
+ * Every failure path is soft. If no backend works, or one drops mid-
+ * transmission, the outgoing voice path is left exactly as it would be without
+ * this class. Ambient sound is a nicety; a player's microphone is not.
  */
 class CAmbientCapture {
 public:
@@ -36,7 +35,7 @@ public:
     void start();
     void stop();
 
-    inline bool isRunning() const { return m_running.load(std::memory_order_acquire); }
+    bool isRunning() const;
 
     /*
      * Consumer side, called from TeamSpeak's capture callback.
@@ -66,24 +65,26 @@ private:
     CAmbientCapture(const CAmbientCapture &) = delete;
     CAmbientCapture &operator=(const CAmbientCapture &) = delete;
 
-    void readLoop();
-    bool connectToHelper();
+    /*
+     * Picks a backend on first use and remembers it.
+     *
+     * Probing is not free -- a WASAPI activation that is going to fail still
+     * costs most of a second -- and start() is on the player's push-to-talk
+     * path, so paying it once per TeamSpeak session rather than once per
+     * transmission is the difference between an unnoticeable delay and a
+     * missing first second of every key-up.
+     */
+    IAmbientSource *resolveSource();
+    void openDumpFile();
 
-    static constexpr unsigned short HELPER_PORT = 47806;
-    static constexpr int CONNECT_TIMEOUT_MS = 200;
     static constexpr size_t SAMPLE_RATE = 48000;
     // 200 ms of slack for scheduling jitter, but never more than 100 ms behind
     // live -- beyond that the ambience lags the speech it accompanies.
     static constexpr size_t RING_CAPACITY = SAMPLE_RATE / 5;
     static constexpr size_t RING_MAX_BACKLOG = SAMPLE_RATE / 10;
 
-    SOCKET m_socket = INVALID_SOCKET;
-    bool m_wsaReady = false;
-    std::thread m_thread;
-    std::atomic<bool> m_running{false};
-
-    // Step 2 instrumentation: proves start/stop alignment with transmit state.
-    std::atomic<uint64_t> m_bytesThisSession{0};
+    std::unique_ptr<IAmbientSource> m_source;
+    bool m_fellBack = false;
 
     CAmbientRingBuffer m_ring{RING_CAPACITY, RING_MAX_BACKLOG};
     // Owned here rather than at the mix site so its hold state is reset with

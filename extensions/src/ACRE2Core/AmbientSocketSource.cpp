@@ -1,0 +1,204 @@
+#include "AmbientSocketSource.h"
+
+#include "Log.h"
+
+CAmbientSocketSource::~CAmbientSocketSource() {
+    this->stop();
+}
+
+void CAmbientSocketSource::setError(const std::string &what) {
+    {
+        std::lock_guard<std::mutex> guard(this->m_errorMutex);
+        this->m_error = what;
+    }
+    this->m_failed.store(true, std::memory_order_release);
+}
+
+std::string CAmbientSocketSource::lastError() const {
+    std::lock_guard<std::mutex> guard(this->m_errorMutex);
+    return this->m_error;
+}
+
+/*
+ * Connect to the helper without ever blocking the caller for long.
+ *
+ * start() runs on the RPC thread that handles startRadioSpeaking, which is in
+ * the player's push-to-talk path. A blocking connect to a helper that is not
+ * running would stall their PTT, so the socket is put in non-blocking mode and
+ * given a short bounded window via select().
+ */
+bool CAmbientSocketSource::connectToHelper() {
+    // Winsock is refcounted per process. The TeamSpeak client has certainly
+    // initialised it already, but relying on a host's internals is fragile and
+    // a second startup is cheap.
+    if (!this->m_wsaReady) {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            this->setError("WSAStartup failed");
+            LOG("AMBIENT: WSAStartup failed -- ambient sound unavailable");
+            return false;
+        }
+        this->m_wsaReady = true;
+    }
+
+    this->m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (this->m_socket == INVALID_SOCKET) {
+        this->setError("socket() failed");
+        LOG("AMBIENT: socket() failed: %d", WSAGetLastError());
+        return false;
+    }
+
+    u_long nonBlocking = 1;
+    ioctlsocket(this->m_socket, FIONBIO, &nonBlocking);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0x00, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(HELPER_PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    connect(this->m_socket, (struct sockaddr *)&addr, sizeof(addr));
+
+    fd_set writeSet;
+    FD_ZERO(&writeSet);
+    FD_SET(this->m_socket, &writeSet);
+
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = CONNECT_TIMEOUT_MS * 1000;
+
+    if (select(0, NULL, &writeSet, NULL, &timeout) <= 0) {
+        this->setError("helper not reachable");
+        LOG("AMBIENT: helper not reachable on port %d -- ambient sound disabled "
+            "for this transmission", HELPER_PORT);
+        closesocket(this->m_socket);
+        this->m_socket = INVALID_SOCKET;
+        return false;
+    }
+
+    // select() reporting writable does not by itself mean the connect
+    // succeeded; a refused connection also becomes writable.
+    int soError = 0;
+    int soErrorLen = sizeof(soError);
+    if (getsockopt(this->m_socket, SOL_SOCKET, SO_ERROR, (char *)&soError, &soErrorLen) != 0
+        || soError != 0) {
+        this->setError("connection refused");
+        LOG("AMBIENT: connect refused (%d) -- is ambient-helper.py running?", soError);
+        closesocket(this->m_socket);
+        this->m_socket = INVALID_SOCKET;
+        return false;
+    }
+
+    u_long blocking = 0;
+    ioctlsocket(this->m_socket, FIONBIO, &blocking);
+
+    // Bound recv() so the reader thread cannot wedge if the helper stops
+    // sending without closing the socket.
+    DWORD recvTimeout = 500;
+    setsockopt(this->m_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&recvTimeout, sizeof(recvTimeout));
+
+    return true;
+}
+
+bool CAmbientSocketSource::start(SampleSink sink) {
+    if (this->m_running.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    // Join a previous thread that has exited on its own (helper went away).
+    if (this->m_thread.joinable()) {
+        this->m_thread.join();
+    }
+
+    if (!sink) {
+        this->setError("no sink");
+        return false;
+    }
+
+    if (!this->connectToHelper()) {
+        return false;  // fail soft: no ambient audio, voice path untouched
+    }
+
+    this->m_sink = std::move(sink);
+    this->m_failed.store(false, std::memory_order_release);
+    this->m_bytesThisSession.store(0, std::memory_order_release);
+    this->m_running.store(true, std::memory_order_release);
+    this->m_thread = std::thread(&CAmbientSocketSource::readLoop, this);
+    return true;
+}
+
+void CAmbientSocketSource::stop() {
+    // Do not gate on m_running: readLoop clears it when the helper goes away,
+    // and in that case there is still a thread to join and a socket to close.
+    const bool hadSession = this->m_thread.joinable() || this->m_socket != INVALID_SOCKET;
+    if (!hadSession) {
+        return;
+    }
+
+    this->m_running.store(false, std::memory_order_release);
+
+    // Shut the socket down first so a blocked recv() returns promptly rather
+    // than waiting out its timeout.
+    if (this->m_socket != INVALID_SOCKET) {
+        shutdown(this->m_socket, SD_BOTH);
+    }
+
+    if (this->m_thread.joinable()) {
+        this->m_thread.join();
+    }
+
+    if (this->m_socket != INVALID_SOCKET) {
+        closesocket(this->m_socket);
+        this->m_socket = INVALID_SOCKET;
+    }
+}
+
+void CAmbientSocketSource::readLoop() {
+    // Wire format is signed 16-bit mono at 48 kHz: already exactly what
+    // onEditCapturedVoiceDataEvent expects, so there is nothing to convert.
+    // Aligned for the int16_t reinterpret below.
+    alignas(int16_t) char buffer[4096];
+    int carry = 0;  // trailing byte of a sample split across two recv() calls
+
+    while (this->m_running.load(std::memory_order_acquire)) {
+        const int received = recv(this->m_socket, buffer + carry,
+                                  sizeof(buffer) - carry, 0);
+
+        if (received > 0) {
+            this->m_bytesThisSession.fetch_add(received, std::memory_order_relaxed);
+            // recv() can split a sample across reads; carry the odd byte over.
+            const int total = carry + received;
+            this->m_sink(reinterpret_cast<const int16_t *>(buffer), total / 2);
+            if (total & 1) {
+                buffer[0] = buffer[total - 1];
+                carry = 1;
+            } else {
+                carry = 0;
+            }
+            continue;
+        }
+
+        if (received == 0) {
+            // stop() shuts the socket down to unblock this recv, which also
+            // returns 0 -- so only an orderly close while we still expected
+            // audio means the helper actually went away.
+            if (this->m_running.load(std::memory_order_acquire)) {
+                this->setError("helper closed the connection");
+                LOG("AMBIENT: helper closed the connection");
+            }
+            break;
+        }
+
+        const int err = WSAGetLastError();
+        if (err == WSAETIMEDOUT) {
+            continue;  // no audio yet; keep waiting
+        }
+        if (this->m_running.load(std::memory_order_acquire)) {
+            this->setError("recv failed");
+            LOG("AMBIENT: recv failed: %d", err);
+        }
+        break;
+    }
+
+    this->m_running.store(false, std::memory_order_release);
+}

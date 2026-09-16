@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     std::atomic<uint64_t> callbacks{0};
 
     CAmbientWasapiSource source;
-    const bool started = source.start(pid, [&](const int16_t *data, size_t count) {
+    const bool started = source.startForPid(pid, [&](const int16_t *data, size_t count) {
         callbacks.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> guard(collectedMutex);
         collected.insert(collected.end(), data, data + count);

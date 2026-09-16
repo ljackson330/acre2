@@ -188,7 +188,21 @@ std::string CAmbientWasapiSource::describeFormat() const {
     return std::string(buf);
 }
 
-bool CAmbientWasapiSource::start(DWORD targetPid, SampleSink sink) {
+bool CAmbientWasapiSource::start(SampleSink sink) {
+    // The interface deliberately does not take a PID: callers work in terms of
+    // "capture the game", and which process that is belongs to the backend.
+    // No logging here on purpose: this translation unit stays free of ACRE2
+    // dependencies so ambient/probe can build it standalone. Callers that want
+    // to warn about multiple instances use countProcesses() themselves.
+    const DWORD pid = findProcessId(GAME_EXECUTABLE);
+    if (pid == 0) {
+        this->fail("no running process named arma3_x64.exe", S_OK);
+        return false;
+    }
+    return this->startForPid(pid, std::move(sink));
+}
+
+bool CAmbientWasapiSource::startForPid(DWORD targetPid, SampleSink sink) {
     if (this->m_running.load(std::memory_order_acquire)) {
         return true;
     }
@@ -203,6 +217,7 @@ bool CAmbientWasapiSource::start(DWORD targetPid, SampleSink sink) {
     this->m_sink = std::move(sink);
     this->m_failed.store(false, std::memory_order_release);
     this->m_stopRequested.store(false, std::memory_order_release);
+    this->m_bytesThisSession.store(0, std::memory_order_release);
     this->m_resamplePos = 0.0;
     this->m_resampleLast = 0.0f;
     this->m_format = WAVEFORMATEX{};
@@ -460,6 +475,8 @@ void CAmbientWasapiSource::deliver(const BYTE *data, uint32_t frameCount, bool s
         for (uint32_t i = 0; i < frameCount; ++i) {
             out[i] = floatToPcm(mono[i]);
         }
+        this->m_bytesThisSession.fetch_add(out.size() * sizeof(int16_t),
+                                           std::memory_order_relaxed);
         this->m_sink(out.data(), out.size());
         return;
     }
@@ -487,6 +504,8 @@ void CAmbientWasapiSource::deliver(const BYTE *data, uint32_t frameCount, bool s
     this->m_resampleLast = mono[frameCount - 1];
 
     if (!out.empty()) {
+        this->m_bytesThisSession.fetch_add(out.size() * sizeof(int16_t),
+                                           std::memory_order_relaxed);
         this->m_sink(out.data(), out.size());
     }
 }

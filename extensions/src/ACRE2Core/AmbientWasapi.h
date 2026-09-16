@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AmbientSource.h"
+
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <windows.h>
@@ -34,16 +36,14 @@
  * arbitrary requested format or imposes the engine's own -- decides whether the
  * resampler is needed at all, and is the first thing the probe answers.
  */
-class CAmbientWasapiSource {
+class CAmbientWasapiSource : public IAmbientSource {
 public:
-    // Called from the capture thread with mono 48 kHz samples.
-    using SampleSink = std::function<void(const int16_t *, size_t)>;
 
     static constexpr uint32_t TARGET_RATE = 48000;
     static constexpr uint16_t TARGET_CHANNELS = 1;
 
     CAmbientWasapiSource() = default;
-    ~CAmbientWasapiSource();
+    ~CAmbientWasapiSource() override;
     CAmbientWasapiSource(const CAmbientWasapiSource &) = delete;
     CAmbientWasapiSource &operator=(const CAmbientWasapiSource &) = delete;
 
@@ -56,16 +56,29 @@ public:
      * Success here means "the thread started", not "capture works". Poll
      * isRunning() / hasFailed() for that.
      */
-    bool start(DWORD targetPid, SampleSink sink);
-    void stop();
+    bool start(SampleSink sink) override;
+    void stop() override;
 
-    inline bool isRunning() const { return m_running.load(std::memory_order_acquire); }
-    inline bool hasFailed() const { return m_failed.load(std::memory_order_acquire); }
+    // Capture a specific process rather than searching for the game. The probe
+    // uses this; the plugin goes through start().
+    bool startForPid(DWORD targetPid, SampleSink sink);
+
+    inline bool isRunning() const override { return m_running.load(std::memory_order_acquire); }
+    inline bool hasFailed() const override { return m_failed.load(std::memory_order_acquire); }
+
+    const char *name() const override { return "WASAPI process loopback"; }
+    std::string lastError() const override;
+    uint64_t bytesDelivered() const override {
+        return m_bytesThisSession.load(std::memory_order_acquire);
+    }
+
+    // Executable the plugin looks for. Arma's 64-bit client; the 32-bit build
+    // is long dead and not worth a second name.
+    static constexpr const wchar_t *GAME_EXECUTABLE = L"arma3_x64.exe";
 
     // Populated once activation resolves; safe to read after hasFailed() or
     // isRunning() goes true. Describes what the audio engine actually gave us.
     std::string describeFormat() const;
-    std::string lastError() const;
 
     // Finds a process by executable name, case-insensitively. Returns 0 if not
     // found, and the lowest PID if several match -- callers that care about
@@ -87,6 +100,7 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_failed{false};
+    std::atomic<uint64_t> m_bytesThisSession{0};
 
     // Activation is asynchronous; the capture thread waits on this rather than
     // spinning, and always with a bound -- an activation that never completes
