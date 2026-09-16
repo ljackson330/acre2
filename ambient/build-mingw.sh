@@ -72,6 +72,21 @@ PYEOF
 # anything drags it in, so force-include it ahead of every translation unit.
 FLAGS="-isystem $SHIM -isystem $COMPAT -include _mingw.h -include stddef.h"
 
+# Development-only diagnostics, off unless asked for. Currently this gates
+# ambientDumpSplitFile, which records the player's raw microphone to disk --
+# fine on this machine, unacceptable in anything handed to someone else. A
+# compile-time opt-in means shipping it has to be a deliberate act rather than
+# something nobody remembered to turn off.
+DEV_TOOLS=0
+for arg in "$@"; do
+    [[ "$arg" == "--dev" ]] && DEV_TOOLS=1
+done
+if [[ $DEV_TOOLS -eq 1 ]]; then
+    FLAGS="$FLAGS -DACRE2_AMBIENT_DEV_TOOLS"
+    echo ">> DEV TOOLS ENABLED -- this build can record your microphone."
+    echo "   Do not distribute it. Rebuild without --dev before packaging."
+fi
+
 # Without this the DLL imports libstdc++-6.dll, libgcc_s_seh-1.dll and
 # libwinpthread-1.dll, none of which exist in the Proton prefix -- TeamSpeak
 # would fail to load the plugin with no diagnostic. (acre_set_linker_options()
@@ -111,6 +126,16 @@ fi
 echo "ok: no mingw runtime dependencies"
 
 echo "ok: $(x86_64-w64-mingw32-objdump -p "$DLL" | grep -oE "ts3plugin_[A-Za-z0-9_]+" | sort -u | wc -l) unique ts3plugin_* exports"
+
+# Report what is actually in the binary rather than what was asked for, so a
+# stale build directory cannot quietly disagree with the flags.
+SPLIT_PRESENT=$(strings -a "$DLL" | grep -c "ambientDumpSplitFile" || true)
+if [[ "$SPLIT_PRESENT" -gt 0 ]]; then
+    echo "WARNING: this build contains the development split dump (microphone"
+    echo "         recording). Fine locally; never distribute it."
+else
+    echo "ok: no development diagnostics in this build -- safe to distribute"
+fi
 
 # Installing to TeamSpeak's plugin folder alone is not enough. ACRE2Steam runs
 # as an Arma extension on every launch and copies the mod folder's plugin over

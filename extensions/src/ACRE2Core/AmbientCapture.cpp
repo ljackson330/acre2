@@ -158,15 +158,17 @@ void CAmbientCapture::openDumpFile() {
         }
     }
 
+#ifdef ACRE2_AMBIENT_DEV_TOOLS
     const std::string splitPath = CAcreSettings::getInstance()->getAmbientDumpSplitFile();
     if (!splitPath.empty()) {
         if (this->m_splitDump.open(splitPath, (uint32_t)SAMPLE_RATE, 2)) {
-            LOG("AMBIENT: split dump to %s -- left is ambience before the gate, "
-                "right is the microphone before mixing", splitPath.c_str());
+            LOG("AMBIENT: DEV BUILD -- split dump to %s; this records your "
+                "microphone to disk", splitPath.c_str());
         } else {
             LOG("AMBIENT: could not open split dump %s", splitPath.c_str());
         }
     }
+#endif
 
     const float quality = CAcreSettings::getInstance()->getAmbientDumpSignalQuality();
     if (quality > 0.0f && this->m_dump.isOpen()) {
@@ -197,11 +199,13 @@ void CAmbientCapture::stop() {
         LOG("AMBIENT: mixed into 0 callbacks -- nothing was added to the outgoing stream");
     }
 
+#ifdef ACRE2_AMBIENT_DEV_TOOLS
     if (this->m_splitDump.isOpen()) {
         const uint32_t split = this->m_splitDump.bytesWritten();
         this->m_splitDump.close();
         LOG("AMBIENT: split dump closed -- %.2f s written", split / 4.0 / SAMPLE_RATE);
     }
+#endif
 
     if (this->m_dump.isOpen()) {
         const uint32_t dumped = this->m_dump.bytesWritten();
@@ -294,6 +298,7 @@ void CAmbientCapture::dumpOutgoing(const short *samples, int sampleCount, int ch
     }
 }
 
+#ifdef ACRE2_AMBIENT_DEV_TOOLS
 void CAmbientCapture::dumpSplit(const int16_t *ambient, const short *voice,
                                 int sampleCount, int channels) {
     if (!this->m_splitDump.isOpen() || channels <= 0 || sampleCount <= 0) {
@@ -320,3 +325,4 @@ void CAmbientCapture::dumpSplit(const int16_t *ambient, const short *voice,
         this->m_splitDump.write(interleaved, (size_t)frames * 2);
     }
 }
+#endif

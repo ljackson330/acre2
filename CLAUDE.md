@@ -64,10 +64,11 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
   when samples are modified or TeamSpeak discards them silently — it presents
   as broken capture while the mix works perfectly. Bit 2 arrives on input
   meaning "about to be sent". Stock ACRE2 never writes this parameter.
-- **`ambientDumpSplitFile` records ambience and microphone to separate stereo
-  channels**, taken before they are summed and before the gate, for trying DSP
-  offline against real gameplay. Record with the helper on `--no-dsp` or its
-  chain is baked in first. Diagnostic only; never reaches the transmitted stream.
+- **`ambientDumpSplitFile` is a development-only diagnostic and records the
+  player's raw microphone to disk.** It is compiled out unless
+  `build-mingw.sh --dev` is used, deliberately, so shipping it has to be a
+  conscious act. Every build reports which kind it is, read from the binary.
+  Record with the helper on `--no-dsp` or its chain is baked in first.
 - **The ambient DSP is sound design, not simulation.** The names are borrowed
   from real hardware and the values are not. See the reality check in
   `ambient/README.md` before treating any of it as accurate.

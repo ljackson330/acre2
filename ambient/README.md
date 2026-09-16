@@ -693,27 +693,54 @@ Realism is a good source of ideas here and a bad source of final values.
 
 ## Recording ambience and voice separately, for offline A/B
 
-`ambientDumpSplitFile` writes a **stereo** file with ambience on the left and
-the microphone on the right, both captured at the mix site before they are
-summed. The mixed dump proves what gets transmitted but is useless for trying a
-different chain, because the two signals cannot be pulled apart again.
+**Development builds only.** This records the player's raw microphone to disk,
+so it is a compile-time opt-in rather than a setting:
+
+```
+./ambient/build-mingw.sh --dev --install     # enable it
+./ambient/build-mingw.sh --install           # back to a safe build
+```
+
+Without `--dev` the setting, the code and the string are all absent from the
+binary — a comment saying "diagnostic only" is not strong enough for something
+that writes somebody's microphone to a file, and this is the one feature here
+that must never reach a machine that is not this one.
+
+Every build prints which it is, read from the binary rather than the flags, so a
+stale build directory cannot quietly disagree:
+
+```
+ok: no development diagnostics in this build -- safe to distribute
+WARNING: this build contains the development split dump (microphone recording).
+```
+
+With a dev build installed, `ambientDumpSplitFile` writes a **stereo** file:
+ambience left, microphone right, both captured at the mix site before they are
+summed.
 
 ```
 ambientDumpSplitFile = Z:\home\liam\acre2_split.wav
 ```
 
 The ambience channel is taken **before the noise gate**, so gate settings can be
-varied offline too. Two things to know:
+varied offline too. Record with the helper on `--no-dsp`, or its chain is baked
+in before the plugin ever sees the audio and you are A/Bing on top of a
+processed signal.
 
-- **Run the helper with `--no-dsp` when recording material for this**, or its
-  chain is already baked in before the plugin sees the audio and you are A/Bing
-  on top of a processed signal.
-- It is diagnostic only. Nothing about it reaches the transmitted stream, and it
-  is off unless the path is set.
+That gives real gameplay as two aligned tracks, which is a far better test bed
+than the Phase 0 takes for anything about how ambience sits against speech —
+those recordings contain no voice at all.
 
-That gives real gameplay — a Huey, a firefight, whatever — as two aligned
-tracks, which is a much better test bed than the Phase 0 takes for anything
-involving how ambience sits against speech.
+## Before handing a build to anyone else
+
+1. `./ambient/build-mingw.sh --install` — **without** `--dev`. Confirm the
+   output says *no development diagnostics in this build*.
+2. Check the ini you ship or describe has no `ambientDumpSplitFile`, and that
+   `ambientDumpFile` is empty unless the tester is meant to be recording.
+3. `ambientSelfTest` is genuinely meant to ship — it is how a tester answers
+   "does capture work at all" without getting in-game. Leave it.
+4. Rebuild `~/acre2-ambient-test.zip` from that clean build, since the existing
+   one is only as current as the last time it was made.
 
 ## Reality check: how close is any of this to a real radio?
 

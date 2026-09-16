@@ -45,11 +45,19 @@ public:
     // radio DSP a listener's client applies, at this signal quality (0..1), so
     // a demo sounds like what is heard rather than what is sent.
     DECLARE_MEMBER(float, AmbientDumpSignalQuality);
-    // Absolute path; empty disables. Writes a stereo file with the ambience on
-    // the left and the microphone on the right, both taken before they are
-    // summed, so DSP can be tried offline against real material. Diagnostic
-    // only -- it is not part of what gets transmitted.
+#ifdef ACRE2_AMBIENT_DEV_TOOLS
+    /*
+     * DEVELOPMENT ONLY. Writes a stereo file with ambience on the left and the
+     * microphone on the right, both taken before they are summed, so DSP can be
+     * tried offline against real material.
+     *
+     * Compiled out unless ACRE2_AMBIENT_DEV_TOOLS is defined, which only
+     * build-mingw.sh --dev does. This records the player's raw microphone to
+     * disk, so it must never reach a build anyone else runs -- and a comment
+     * saying so is not strong enough on its own.
+     */
     DECLARE_MEMBER(std::string, AmbientDumpSplitFile);
+#endif
     // Diagnostic: run a short capture at plugin start and report the result to
     // the log, so a tester can confirm the capture backend works without
     // getting in-game and keying a radio.
