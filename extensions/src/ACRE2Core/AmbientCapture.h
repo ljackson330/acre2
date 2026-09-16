@@ -59,6 +59,20 @@ public:
     // Per-transmission mix telemetry, reported on stop().
     void noteMixed(double ambientRms);
 
+    /*
+     * Diagnostic: capture for a few seconds and report what arrived.
+     *
+     * Exists because every other way of exercising the capture backend needs
+     * the game running and a radio keyed. A tester on a machine we cannot
+     * reach can set ambientSelfTest, start TeamSpeak, and send back a log line
+     * that says whether capture works at all -- which separates "the backend
+     * is broken" from "the transmit hooks never fired" without a debugging
+     * session.
+     *
+     * Blocks for several seconds, so callers run it on their own thread.
+     */
+    void selfTest();
+
 private:
     CAmbientCapture() = default;
     ~CAmbientCapture();

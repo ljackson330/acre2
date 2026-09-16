@@ -478,6 +478,72 @@ Everything above targets a PID directly. The plugin instead calls
 `powershell.exe` processes live: the lookup found one, the ambiguity warning
 fired correctly, and capture succeeded at −10.0 dBFS / 96.03% non-zero.
 
+## Verified inside real TeamSpeak — 2026-09-16
+
+The plugin was installed into a TeamSpeak 3 client in the VM and the whole
+capture path exercised in-process, with a renamed `powershell.exe` playing a WAV
+standing in for the game (the plugin looks the target up by name, so the
+stand-in has to actually be called `arma3_x64.exe`).
+
+```
+AMBIENT: capture started (WASAPI process loopback)
+AMBIENT SELFTEST: OK -- backend 'WASAPI process loopback', 383040 samples
+                  (7.98 s), peak -10.0 dBFS, post-gate RMS -25.1 dBFS
+ring: overruns=0 underruns=1 skips=30
+```
+
+This closes the gap the standalone probe could not: COM initialisation on the
+capture thread inside `ts3client.exe`, backend selection resolving to WASAPI
+rather than falling back, the by-name process lookup, and the ring and gate all
+working in the host process. Levels match the standalone probe exactly.
+
+`skips=30` is the self-test's own polling loop, not a capture fault — `Sleep(10)`
+really sleeps ~15 ms at the default timer resolution, so it consumes slower than
+the backend produces and the ring trims itself. The real consumer is TeamSpeak's
+capture callback, driven by the audio clock. `overruns=0` is the meaningful
+number.
+
+### `ambientSelfTest`
+
+New diagnostic setting, default off. Set it and the plugin captures for 8 s at
+startup and reports what arrived. It exists so a tester on a machine we cannot
+reach can answer "does capture work at all?" without getting in-game and keying
+a radio — which separates a broken backend from transmit hooks that never fired,
+without a live debugging session.
+
+## ACRE2 needs the DirectX runtime, and fails opaquely without it
+
+The plugin would not load at all at first:
+
+```
+Loading plugin: acre2_win64.dll
+Failed to load plugin: ...\acre2_win64.dll
+```
+
+`LoadLibraryEx` gave error 126, and the import table says why: **`X3DAudio1_7.dll`**,
+a legacy DirectX SDK redistributable that is not part of Windows. Wine ships an
+implementation, which is why this never surfaced on Linux.
+
+**This is not specific to the mingw build** — the stock upstream MSVC
+`acre2_win64.dll` imports the same DLL. Anyone already running ACRE2 has the
+DirectX End-User Runtime and will never hit it. But a clean machine gives no
+useful diagnostic, just "Failed to load plugin", so it is worth knowing before
+handing a build to a tester.
+
+In the VM: `winget install Microsoft.DirectX` installs an MSIX that does not put
+the DLL on the search path, so `X3DAudio1_7.dll` has to be copied from
+`C:\Program Files\WindowsApps\Microsoft.DirectXRuntime_*\` into `System32`.
+
+## Gotchas from the TeamSpeak setup
+
+- **TeamSpeak runs portable when copied rather than installed**, using
+  `<install>\config\` and ignoring `%APPDATA%\TS3Client` entirely. Plugins go in
+  `config\plugins\`, and `acre2.ini` in `config\acre\`.
+- **`Stop-Process -Name powershell` over SSH kills the session's own shell**, so
+  the rest of the command silently never runs. Exclude `$PID`.
+- ACRE2 logs to `%LOCALAPPDATA%\Arma 3\acre2_plugin.log`, which is where every
+  `AMBIENT:` line above comes from.
+
 ## What is still not verified
 
 The Windows backend is proven as far as "the capture class works when called

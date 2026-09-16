@@ -33,7 +33,10 @@
 #include "getVOIPChannelName.h"
 #include "getVOIPChannelUID.h"
 #include "getVOIPServerUID.h"
+#include "AmbientCapture.h"
+
 #include <shlobj.h>
+#include <thread>
 
 acre::Result CEngine::initialize(IClient *client, IServer *externalServer, std::string fromPipeName, std::string toPipeName) {
 
@@ -48,6 +51,11 @@ acre::Result CEngine::initialize(IClient *client, IServer *externalServer, std::
     }
     LOG("Configuration Path: {%s\\acre2.ini}", client->getConfigFilePath().c_str());
     CAcreSettings::getInstance()->load(client->getConfigFilePath() + "\\acre2.ini");
+
+    if (CAcreSettings::getInstance()->getAmbientSelfTest()) {
+        // Detached: this blocks for seconds and must not hold up plugin start.
+        std::thread([] { CAmbientCapture::getInstance()->selfTest(); }).detach();
+    }
 
     this->setClient(client);
     this->setExternalServer(externalServer);

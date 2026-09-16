@@ -94,6 +94,59 @@ void CAmbientCapture::start() {
     LOG("AMBIENT: capture started (%s)", source->name());
 }
 
+void CAmbientCapture::selfTest() {
+    LOG("AMBIENT SELFTEST: starting -- capturing for 8 s");
+
+    this->start();
+
+    // Drain the way the capture callback does, so the ring, the gate and the
+    // backend are all exercised rather than just the activation.
+    const size_t chunk = 480;                 // 10 ms, one gate window
+    int16_t buffer[chunk];
+    double sumSquares = 0.0;
+    size_t realSamples = 0;
+    int16_t peak = 0;
+
+    for (int tick = 0; tick < 800; ++tick) {  // 800 x 10 ms = 8 s
+        const size_t produced = this->drain(buffer, chunk);
+        realSamples += produced;
+        for (size_t i = 0; i < produced; ++i) {
+            const double v = buffer[i];
+            sumSquares += v * v;
+            const int16_t mag = (int16_t)((buffer[i] < 0) ? -(int)buffer[i] : (int)buffer[i]);
+            if (mag > peak) {
+                peak = mag;
+            }
+        }
+        Sleep(10);
+    }
+
+    const char *backend = this->m_source ? this->m_source->name() : "none";
+    if (realSamples == 0) {
+        LOG("AMBIENT SELFTEST: FAILED -- backend '%s' delivered no samples (%s)",
+            backend, this->m_source ? this->m_source->lastError().c_str() : "no source");
+    } else {
+        const double rms = sqrt(sumSquares / realSamples);
+        LOG("AMBIENT SELFTEST: OK -- backend '%s', %zu samples (%.2f s), "
+            "peak %.1f dBFS, post-gate RMS %.1f dBFS",
+            backend, realSamples, realSamples / (double)SAMPLE_RATE,
+            (peak > 0) ? 20.0 * log10(peak / 32768.0) : -999.0,
+            (rms > 0.0) ? 20.0 * log10(rms / 32768.0) : -999.0);
+        LOG("AMBIENT SELFTEST: post-gate RMS is measured after the noise gate, "
+            "so silence here with a loud game means the gate is closing, not "
+            "that capture failed");
+        // Sleep(10) really sleeps ~15 ms at the default timer resolution, so
+        // this loop consumes slower than the backend produces and the ring
+        // trims itself. The real consumer is TeamSpeak's capture callback,
+        // driven by the audio clock at exactly the right rate, so the skips
+        // reported below are an artifact of this test and not a capture fault.
+        LOG("AMBIENT SELFTEST: ring skips/underruns on the next line come from "
+            "this test's own polling loop, not from the capture path");
+    }
+
+    this->stop();
+}
+
 void CAmbientCapture::openDumpFile() {
     const std::string dumpPath = CAcreSettings::getInstance()->getAmbientDumpFile();
     if (dumpPath.empty()) {

@@ -41,6 +41,10 @@ public:
     // Absolute path; empty disables. Writes the outgoing voice stream after
     // mixing -- what TeamSpeak actually encodes and sends.
     DECLARE_MEMBER(std::string, AmbientDumpFile);
+    // Diagnostic: run a short capture at plugin start and report the result to
+    // the log, so a tester can confirm the capture backend works without
+    // getting in-game and keying a radio.
+    DECLARE_MEMBER(bool, AmbientSelfTest);
 
     DECLARE_MEMBER(std::string, Path);
 };
