@@ -378,23 +378,77 @@ the helper" cannot stall push-to-talk. The bounded wait
 (`ACTIVATE_TIMEOUT_MS`) stays anyway, since that conclusion is one Wine version
 deep.
 
-## What is not verified
+## Verified on Windows — 2026-09-15
 
-**The success path has never run.** Proton proves the plumbing, not the
-capture. Specifically open:
+Run in the local VM (Windows 11 24H2, build 26100) against a PowerShell process
+looping `C:\Windows\Media\Alarm01.wav`, using the cross-compiled
+`ambient-probe.exe`. Both processes in the interactive session — see the gotcha
+below.
 
-- Whether a process-loopback client accepts an arbitrary requested format. The
-  code asks for 48 kHz mono s16 and the resampler in `deliver()` exists only in
-  case it does not. **If the probe reports 48000 Hz / 1 ch / 16-bit, the
-  resampler is dead code and should be deleted** -- it is the largest piece of
-  unnecessary risk in the file.
-- Whether `AUDCLNT_STREAMFLAGS_LOOPBACK` is correct alongside process-loopback
-  activation, and whether the buffer-duration argument is accepted.
-- What an idle target delivers: silence packets, or nothing at all. `deliver()`
-  treats a silent packet as zeros rather than skipping it, on the assumption
-  that dropping it would drift the ambience out of step with the voice.
-- Whether PID scoping actually isolates one process. This is the gameplan's
-  hard requirement and needs two audible processes to test.
+### Process loopback works, and the format is ours to choose
+
+```
+OK: activated. negotiated format: 48000 Hz, 1 ch, 16-bit, tag 1
+samples : 484800 (10.10 s at 48 kHz)
+peak    : -10.0 dBFS      rms: -24.6 dBFS      non-zero: 96.30%
+```
+
+The client **accepted the requested 48 kHz mono s16 exactly**. 10.09 s of audio
+for a 10 s capture, so the rate is real and does not drift. The WAV was pulled
+back to Linux and confirmed independently with `wav_stats.py`.
+
+**This kills the resampler.** `Initialize()` either accepts the format we ask
+for or fails outright, and `m_format` is set from the request rather than from
+the engine — so the conversion paths in `deliver()` were unreachable by
+construction, not merely unused. Removed.
+
+### Requirement: PID scoping isolates — proven, not reasoned
+
+The gameplan's hard requirement is that capture never picks up the device mix,
+because ACRE2 plays received radio through the TeamSpeak process and
+re-transmitting it would feed back. Tested directly: one process blaring, one
+process rendering nothing, captured seconds apart on the same device.
+
+| capture target | non-zero samples | peak |
+|---|---|---|
+| a process rendering **nothing**, while the other blares | **0.00%** (exact zero, 389,280 samples) | −inf |
+| the **blaring** process (positive control) | 91.55% | −10.0 dBFS |
+
+The positive control is what makes the first row mean something: the same probe,
+same conditions, seconds apart, does capture audio when there is audio to
+capture. So the silence is isolation, not a broken capture.
+
+### An idle target delivers silence, not nothing
+
+The silent capture still produced **811 buffers** over 8 s — process loopback
+emits silent packets rather than stopping. `deliver()` treats them as zeros
+rather than skipping them, which is what keeps the ambience in step with the
+speech it accompanies. That guess turned out to be the right one.
+
+## Gotcha: audio is per-session, and SSH lands in session 0
+
+An SSH session runs in session 0 (services); the desktop is session 1. Windows
+audio is per-session, so **nothing started over SSH can render or capture
+audio** — it will activate happily and record digital silence forever, which
+looks exactly like a broken capture.
+
+Run both the renderer and the probe in the interactive session:
+
+```
+schtasks /create /tn AmbientProbe /tr "powershell -File C:\path\script.ps1" \
+         /sc once /st 00:00 /ru Quickemu /it /f
+schtasks /run /tn AmbientProbe
+```
+
+`/it` is the load-bearing flag.
+
+## What is still not verified
+
+- **Arma's own render stream.** Everything above used PowerShell as the render
+  process. Whether Arma renders through the shared audio engine in a way that
+  captures cleanly needs a real machine with the game.
+- **BattlEye.** Unverifiable anywhere but a real install.
+- Tier B: Opus survival, receive-side radio DSP, `ambientVolume` tuning.
 
 # Picking this up again
 
