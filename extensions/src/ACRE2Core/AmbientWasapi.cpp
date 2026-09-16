@@ -443,8 +443,10 @@ void CAmbientWasapiSource::deliver(const BYTE *data, uint32_t frameCount, bool s
         // ambience out of step with the speech it accompanies. Process loopback
         // really does send these -- an idle target produced 811 buffers of
         // silence over 8 s rather than going quiet.
+        // resize, not assign: the buffer only ever holds zeros, so growing it
+        // zero-fills the new tail and leaves the rest alone.
         if (this->m_silence.size() < frameCount) {
-            this->m_silence.assign(frameCount, 0);
+            this->m_silence.resize(frameCount, 0);
         }
         this->m_sink(this->m_silence.data(), frameCount);
         return;

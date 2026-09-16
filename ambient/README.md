@@ -459,11 +459,39 @@ schtasks /run /tn AmbientProbe
 
 `/it` is the load-bearing flag.
 
+### The gate, checked against non-Arma audio for the first time
+
+The probe runs the shipped `CAmbientGate` over what it captured. On the alarm
+loop it reported **84.2% of windows open at −35 dBFS**, and an independent
+Python reimplementation of the same algorithm over the same WAV gave **84.2%**
+— an exact match, so the C++ gate does what it is specified to do.
+
+The figure is below the firefight's 88.5% because `Alarm01.wav` contains a
+1.45 s silent gap between loops (145 consecutive sub-threshold windows). The
+gate correctly closes through most of it, and the 200 ms hold bridges the nine
+short 30–90 ms dips without chattering. Nothing anomalous.
+
+### The plugin's own entry path
+
+Everything above targets a PID directly. The plugin instead calls
+`start()` → `findProcessId()`, which had never run. Tested with three
+`powershell.exe` processes live: the lookup found one, the ambiguity warning
+fired correctly, and capture succeeded at −10.0 dBFS / 96.03% non-zero.
+
 ## What is still not verified
 
-- **Arma's own render stream.** Everything above used PowerShell as the render
-  process. Whether Arma renders through the shared audio engine in a way that
-  captures cleanly needs a real machine with the game.
+The Windows backend is proven as far as "the capture class works when called
+the way the plugin calls it". Beyond that:
+
+- **No TeamSpeak has ever loaded this DLL with a WASAPI source in it.** Every
+  Windows result here comes from `ambient-probe.exe`. The mix into
+  `onEditCapturedVoiceDataEvent`, the `*edited |= 1` contract and the transmit
+  hooks have only ever run against the socket backend. The Linux regression
+  test does not close this either — it exercises the helper path by
+  construction.
+- **Arma's own render stream.** A PowerShell `SoundPlayer` is not the game.
+  Whether Arma renders through the shared engine in a way that captures cleanly
+  needs a real machine with it installed.
 - **BattlEye.** Unverifiable anywhere but a real install.
 - Tier B: Opus survival, receive-side radio DSP, `ambientVolume` tuning.
 
