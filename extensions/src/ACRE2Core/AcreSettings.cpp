@@ -21,6 +21,7 @@ acre::Result CAcreSettings::save(std::string filename) {
     iniFile << "ambientVolume = " << this->m_AmbientVolume << ";\n";
     iniFile << "ambientGateThreshold = " << this->m_AmbientGateThreshold << ";\n";
     iniFile << "ambientSelfTest = " << (this->m_AmbientSelfTest ? "true" : "false") << ";\n";
+    iniFile << "ambientDumpSignalQuality = " << this->m_AmbientDumpSignalQuality << ";\n";
     // No trailing ';' here: this parser only treats ';' as a comment when
     // preceded by whitespace, so it would be read back as part of the path.
     iniFile << "ambientDumpFile = " << this->m_AmbientDumpFile << "\n";
@@ -51,11 +52,13 @@ acre::Result CAcreSettings::load(std::string filename) {
     this->m_DisableUnmuteClients = config.GetBoolean("acre2", "disableUnmuteClients", false);
     this->m_DisableTS3ChannelSwitch = config.GetBoolean("acre2", "disableTS3ChannelSwitch", false);
     this->m_AmbientEnabled = config.GetBoolean("acre2", "ambientEnabled", true);
-    this->m_AmbientVolume = (float)config.GetReal("acre2", "ambientVolume", 0.5f);
+    this->m_AmbientVolume = (float)config.GetReal("acre2", "ambientVolume", 0.35f);
     // -35 dBFS: measured as the point where foliage, waves and footsteps are
     // fully suppressed while combat still passes (see ambient/README.md).
     this->m_AmbientGateThreshold = (float)config.GetReal("acre2", "ambientGateThreshold", -35.0f);
     this->m_AmbientSelfTest = config.GetBoolean("acre2", "ambientSelfTest", false);
+    this->m_AmbientDumpSignalQuality =
+        (float)config.GetReal("acre2", "ambientDumpSignalQuality", 0.0f);
     this->m_AmbientDumpFile = config.Get("acre2", "ambientDumpFile", "");
     while (!this->m_AmbientDumpFile.empty()
            && (this->m_AmbientDumpFile.back() == ';'

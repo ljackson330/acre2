@@ -41,6 +41,10 @@ public:
     // Absolute path; empty disables. Writes the outgoing voice stream after
     // mixing -- what TeamSpeak actually encodes and sends.
     DECLARE_MEMBER(std::string, AmbientDumpFile);
+    // 0 disables. Above zero, the dump is run through the same receive-side
+    // radio DSP a listener's client applies, at this signal quality (0..1), so
+    // a demo sounds like what is heard rather than what is sent.
+    DECLARE_MEMBER(float, AmbientDumpSignalQuality);
     // Diagnostic: run a short capture at plugin start and report the result to
     // the log, so a tester can confirm the capture backend works without
     // getting in-game and keying a radio.

@@ -4,6 +4,7 @@
 #include "AmbientSocketSource.h"
 #include "AmbientWasapi.h"
 #include "Log.h"
+#include "RadioEffect.h"
 
 #include <cmath>
 
@@ -152,10 +153,21 @@ void CAmbientCapture::openDumpFile() {
     if (dumpPath.empty()) {
         return;
     }
-    if (this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
-        LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
-    } else {
+    if (!this->m_dump.open(dumpPath, (uint32_t)SAMPLE_RATE, 1)) {
         LOG("AMBIENT: could not open dump file %s", dumpPath.c_str());
+        return;
+    }
+    LOG("AMBIENT: dumping outgoing stream to %s", dumpPath.c_str());
+
+    const float quality = CAcreSettings::getInstance()->getAmbientDumpSignalQuality();
+    if (quality > 0.0f) {
+        this->m_dumpRadio.reset(new CRadioEffect());
+        this->m_dumpRadio->setParam("signalQuality", quality);
+        LOG("AMBIENT: dump will carry the receive-side radio effect at signal "
+            "quality %.2f -- this is what a listener hears, minus the Opus "
+            "round trip", quality);
+    } else {
+        this->m_dumpRadio.reset();
     }
 }
 
@@ -179,6 +191,7 @@ void CAmbientCapture::stop() {
     if (this->m_dump.isOpen()) {
         const uint32_t dumped = this->m_dump.bytesWritten();
         this->m_dump.close();
+        this->m_dumpRadio.reset();
         LOG("AMBIENT: dump closed -- %.2f s written", dumped / 2.0 / SAMPLE_RATE);
     }
 
@@ -221,20 +234,39 @@ void CAmbientCapture::noteMixed(double ambientRms) {
 }
 
 void CAmbientCapture::dumpOutgoing(const short *samples, int sampleCount, int channels) {
-    if (!this->m_dump.isOpen() || channels <= 0) {
+    if (!this->m_dump.isOpen() || channels <= 0 || sampleCount <= 0) {
         return;
     }
-    if (channels == 1) {
-        this->m_dump.write(reinterpret_cast<const int16_t *>(samples), sampleCount);
-        return;
-    }
-    // Downmix to mono so the dump matches the declared header.
-    for (int frame = 0; frame < sampleCount; ++frame) {
-        int32_t sum = 0;
-        for (int channel = 0; channel < channels; ++channel) {
-            sum += samples[(frame * channels) + channel];
+
+    // CFilterRadio works into a fixed 4096-sample buffer, so never hand it more
+    // than that in one go. TeamSpeak's callback is far smaller in practice, but
+    // the dump must not be the thing that overruns it.
+    constexpr int MAX_CHUNK = 4096;
+    int16_t mono[MAX_CHUNK];
+
+    for (int offset = 0; offset < sampleCount; offset += MAX_CHUNK) {
+        const int remaining = sampleCount - offset;
+        const int frames = (remaining < MAX_CHUNK) ? remaining : MAX_CHUNK;
+
+        // Downmix so the dump matches its declared mono header, and so the
+        // radio effect below gets the single contiguous channel it expects --
+        // which is also how the receive path feeds it.
+        if (channels == 1) {
+            memcpy(mono, samples + offset, frames * sizeof(int16_t));
+        } else {
+            for (int frame = 0; frame < frames; ++frame) {
+                int32_t sum = 0;
+                const int base = (offset + frame) * channels;
+                for (int channel = 0; channel < channels; ++channel) {
+                    sum += samples[base + channel];
+                }
+                mono[frame] = static_cast<int16_t>(sum / channels);
+            }
         }
-        const int16_t mono = static_cast<int16_t>(sum / channels);
-        this->m_dump.write(&mono, 1);
+
+        if (this->m_dumpRadio) {
+            this->m_dumpRadio->process(mono, frames);
+        }
+        this->m_dump.write(mono, frames);
     }
 }

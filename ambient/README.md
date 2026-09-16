@@ -226,8 +226,32 @@ once a second client is receiving, but it cannot show your own outgoing audio.
 | key | default | meaning |
 |---|---|---|
 | `ambientEnabled` | `true` | master switch |
-| `ambientVolume` | `0.5` | ambience level relative to voice |
+| `ambientVolume` | `0.35` | ambience level relative to voice |
 | `ambientGateThreshold` | `-35.0` | dBFS below which ambience is suppressed |
+| `ambientSelfTest` | `false` | capture for 8 s at startup and report to the log |
+| `ambientDumpSignalQuality` | `0.0` | above zero, run the dump through the receive-side radio DSP at this signal quality (0–1) |
+
+## Making the dump sound like what a listener hears
+
+The dump is the *transmitted* buffer, captured before Opus and before the
+receiving client applies its radio DSP — so it sounds clean and dry, not like
+radio. Set `ambientDumpSignalQuality` above zero and the dump is additionally
+run through `CRadioEffect`, **the same object the receive path uses**, not a
+reimplementation of its maths:
+
+```
+ambientDumpSignalQuality = 0.9;
+```
+
+0.9 is a strong, clean signal. Lower values add more pink and white noise,
+more ring modulation and more foldback distortion, because the filter scales
+all three by `1.25 - quality`. Zero disables the whole stage and also means
+silence in-game, which is why zero is the "off" value here.
+
+**It is a close simulation, not the real thing.** The Opus round trip sits
+between transmit and receive in reality and cannot be reproduced from the
+transmitting side, so a demo made this way will sound slightly better than what
+a listener actually gets.
 
 **Settings are read once, when the plugin starts.** `CEngine::initialize()`
 loads `acre2.ini` at TeamSpeak launch and never re-reads it, so editing the
@@ -236,9 +260,9 @@ change. When a dump path is picked up, capture start logs
 `AMBIENT: dumping outgoing stream to <path>`; the absence of that line means
 the setting was not loaded.
 
-`ambientVolume` is the one to try first. 0.5 was chosen to sit clearly under
-speech given the Phase 0 levels (combat at −23.7 dBFS RMS), but it is a
-starting point, not a measured optimum — that needs a real listener.
+`ambientVolume` is the one to try first. It started at 0.5, reasoned from the
+Phase 0 levels (combat at −23.7 dBFS RMS), and is now 0.35 — still a starting
+point rather than a measured optimum, which needs a real listener.
 
 ## Gate implementation verified against the Phase 0 takes
 

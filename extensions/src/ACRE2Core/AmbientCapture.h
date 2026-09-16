@@ -9,6 +9,8 @@
 #include <atomic>
 #include <memory>
 
+class CRadioEffect;
+
 /*
  * Ambient battle sound: the pipeline between a capture backend and the
  * outgoing voice stream.
@@ -51,9 +53,17 @@ public:
     // what TeamSpeak actually hands us rather than what the docs promise.
     void logFormatOnce(int sampleCount, int channels);
 
-    // Writes the post-mix outgoing buffer to disk when a dump file is
-    // configured. This is the transmitted stream, so it is both the proof the
-    // feature works and the demo of what a listener hears.
+    /*
+     * Writes the post-mix outgoing buffer to disk when a dump file is
+     * configured. This is the transmitted stream, so it is the proof the
+     * feature works.
+     *
+     * With ambientDumpSignalQuality above zero it also runs the buffer through
+     * CRadioEffect -- the same object the receive path uses, not a copy of its
+     * maths -- so the file sounds like what a listener hears rather than what
+     * is sent. The one thing it cannot reproduce is the Opus round trip, which
+     * sits between the two in reality.
+     */
     void dumpOutgoing(const short *samples, int sampleCount, int channels);
 
     // Per-transmission mix telemetry, reported on stop().
@@ -105,6 +115,8 @@ private:
     // each transmission and its threshold is resolved once, not per callback.
     CAmbientGate m_gate;
     CAmbientWavWriter m_dump;
+    // Rebuilt per transmission so its filter and noise state start clean.
+    std::unique_ptr<CRadioEffect> m_dumpRadio;
     std::atomic<uint32_t> m_mixedCallbacks{0};
     std::atomic<double> m_ambientRmsSum{0.0};
     std::atomic<bool> m_formatLogged{false};
