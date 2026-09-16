@@ -1,6 +1,7 @@
 # ACRE2 fork — ambient battle sound
 
-Private fork of [IDI-Systems/acre2](https://github.com/IDI-Systems/acre2).
+Public fork of [IDI-Systems/acre2](https://github.com/IDI-Systems/acre2)
+(`ljackson330/acre2`) — so GitHub Actions is free here, on standard runners.
 `origin` is the fork; `upstream` is IDI-Systems, fetch-only.
 
 Feature work lives in [ambient/](ambient/) and is specified in
@@ -70,6 +71,14 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
 
 Needs Arma running and producing audio; most of it cannot be verified from a
 terminal alone. Anything touching the audio path should be validated natively
-on Linux first where possible — the ring buffer and gate both have native test
-harnesses, and ThreadSanitizer caught a real data race in the ring buffer that
-would have been miserable to debug through Wine.
+on Linux first where possible.
+
+`./ambient/run-tests.sh` builds and runs the ring buffer and gate tests three
+ways — optimised, ASan+UBSan, and ThreadSanitizer. They are shared by both
+backends, so they are the cheapest protection available for the Windows port;
+CI runs them on every push that touches the ambient sources.
+
+`./ambient/build-probe.sh` builds `ambient-probe.exe`, the standalone WASAPI
+process-loopback test. It cannot succeed under Proton, which has no
+process-loopback device — a clean activation failure there is the correct
+result, not a bug.

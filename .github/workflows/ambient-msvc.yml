@@ -23,6 +23,8 @@ on:
       - 'extensions/src/ACRE2Core/Ambient*'
       - 'extensions/src/ACRE2Core/SoundEngine.cpp'
       - 'extensions/src/ACRE2Core/AcreSettings.*'
+      - 'ambient/tests/**'
+      - 'ambient/run-tests.sh'
       - '.github/workflows/ambient-msvc.yml'
 
 concurrency:
@@ -71,3 +73,19 @@ jobs:
              extensions\src\ACRE2Core\ambient_header_check.cpp
           if errorlevel 1 exit /b 1
           echo Ambient sources compile clean under MSVC.
+
+  # The ring buffer and gate are shared by both backends and free of Windows
+  # dependencies, so they can run under real sanitizers on a Linux runner.
+  # ThreadSanitizer is the point: the ring buffer is lock-free
+  # single-producer/single-consumer, and a race there would present as
+  # intermittent audio corruption on a player's machine.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run ambient pipeline tests
+        run: ./ambient/run-tests.sh
