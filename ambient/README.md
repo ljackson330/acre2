@@ -340,6 +340,62 @@ unbuilt, and `sync`, `install-vs` and the MSVC workflow are all unrun.
   The `archive-virtio/virtio-win-<version>-1/` path is not, and serves the same
   ISO.
 
+# The WASAPI capture source
+
+`AmbientWasapi.h/.cpp` implements Windows process-loopback capture, and
+`ambient/probe/` builds it into `ambient-probe.exe` -- the same translation
+unit, so a probe result is evidence about the shipping code rather than about a
+reimplementation of it. Build with `ambient/build-probe.sh`.
+
+The class delivers s16 mono 48 kHz to a sink, which is the wire format the
+Linux helper already produces, so everything downstream stays unchanged when it
+is eventually wired in behind a source interface.
+
+## What is verified
+
+- **Compiles under MSVC against the real Windows SDK**, including the vendored
+  `ambient/compat/audioclientactivationparams.h` -- mingw does not ship that
+  header at all, so this is the check that the activation structures match the
+  genuine definitions.
+- **Links statically.** `ambient-probe.exe` depends only on KERNEL32, ole32,
+  mmdevapi and the UCRT, all present on any Windows 10+ machine, so it can be
+  handed to a tester as a single file.
+- **The activation path runs end to end under Proton and fails correctly.**
+  Given `--pid 100`, the probe reports
+  `process loopback activation rejected (0x80070002)` in under a second.
+
+That last result is worth more than it looks. `0x80070002` is
+`ERROR_FILE_NOT_FOUND` -- the `VAD\Process_Loopback` device does not exist,
+which is exactly right for Proton. Reaching that error means
+`ActivateAudioInterfaceAsync` dispatched, **the completion handler fired**, and
+`GetActivateResult` returned a specific answer from the audio stack. So the COM
+initialisation, the `AUDIOCLIENT_ACTIVATION_PARAMS` blob, the `IAgileObject`
+plumbing and the error path are all structurally correct.
+
+It also settles an open design question: under Proton the handler *does* get
+invoked with a failure rather than never arriving, so "try WASAPI, fall back to
+the helper" cannot stall push-to-talk. The bounded wait
+(`ACTIVATE_TIMEOUT_MS`) stays anyway, since that conclusion is one Wine version
+deep.
+
+## What is not verified
+
+**The success path has never run.** Proton proves the plumbing, not the
+capture. Specifically open:
+
+- Whether a process-loopback client accepts an arbitrary requested format. The
+  code asks for 48 kHz mono s16 and the resampler in `deliver()` exists only in
+  case it does not. **If the probe reports 48000 Hz / 1 ch / 16-bit, the
+  resampler is dead code and should be deleted** -- it is the largest piece of
+  unnecessary risk in the file.
+- Whether `AUDCLNT_STREAMFLAGS_LOOPBACK` is correct alongside process-loopback
+  activation, and whether the buffer-duration argument is accepted.
+- What an idle target delivers: silence packets, or nothing at all. `deliver()`
+  treats a silent packet as zeros rather than skipping it, on the assumption
+  that dropping it would drift the ambience out of step with the voice.
+- Whether PID scoping actually isolates one process. This is the gameplan's
+  hard requirement and needs two audible processes to test.
+
 # Picking this up again
 
 ## To get running

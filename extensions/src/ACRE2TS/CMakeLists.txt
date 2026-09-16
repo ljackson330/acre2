@@ -20,7 +20,11 @@ add_library( ${ACRE_NAME} MODULE ${SOURCES} ${GLOBAL_SOURCES})
 target_link_libraries(${ACRE_NAME} ACRE2Core ACRE2Shared x3daudio)
 if(NOT MSVC)
     # mingw ignores #pragma comment(lib, ...), so name these explicitly.
-    target_link_libraries(${ACRE_NAME} shlwapi version ws2_32 advapi32)
+    # ole32/mmdevapi are for the ambient WASAPI process-loopback source. Nothing
+    # references it yet, so the linker does not pull that object out of
+    # ACRE2Core and the build links without them -- until it is wired in, at
+    # which point the failure would look unrelated to this file.
+    target_link_libraries(${ACRE_NAME} shlwapi version ws2_32 advapi32 ole32 mmdevapi)
 endif()
 set_target_properties(${ACRE_NAME} PROPERTIES FOLDER ACRE2)
 if(MSVC)
