@@ -40,6 +40,28 @@ ssh_args=(
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Ask qemu what it can actually do rather than assuming.
+#
+# quickemu defaults to sdl, and a qemu display backend can be installed but
+# unloadable -- on this machine ui-sdl.so links against libjxl 0.12 while the
+# system has 0.11, so `-display sdl` fails at startup and the VM silently never
+# boots. The failure surfaces only in windows-11.log, which is easy to miss.
+pick_display() {
+    if [[ -n "${ACRE2_VM_DISPLAY:-}" ]]; then
+        echo "$ACRE2_VM_DISPLAY"
+        return
+    fi
+    local available
+    available="$(qemu-system-x86_64 -display help 2>/dev/null)"
+    for candidate in gtk sdl spice-app; do
+        if grep -qx "$candidate" <<<"$available"; then
+            echo "$candidate"
+            return
+        fi
+    done
+    echo "none"
+}
+
 require_iso() {
     [[ -f "$VM_ISO" ]] || die "Windows ISO missing at $VM_ISO
 Microsoft blocks quickget's automated download by IP, so fetch it manually:
@@ -53,7 +75,8 @@ up)
     require_iso
     command -v quickemu >/dev/null || die "quickemu not installed"
     echo ">> starting VM (SSH will be on localhost:$SSH_PORT once provisioned)"
-    cd "$VM_DIR" && exec quickemu --vm "$VM_CONF" --display sdl
+    echo "   display: $(pick_display)"
+    cd "$VM_DIR" && exec quickemu --vm "$VM_CONF" --display "$(pick_display)"
     ;;
 
 headless)
