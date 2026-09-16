@@ -4,10 +4,11 @@ Public fork of [IDI-Systems/acre2](https://github.com/IDI-Systems/acre2)
 (`ljackson330/acre2`) — so GitHub Actions is free here, on standard runners.
 `origin` is the fork; `upstream` is IDI-Systems, fetch-only.
 
-Feature work lives in [ambient/](ambient/) and is specified in
-[gameplan.md](gameplan.md). **Read [ambient/README.md](ambient/README.md)
-first** — it carries the current state, the Phase 0 measurements everything is
-tuned from, and what is still unverified.
+Feature work lives in [ambient/](ambient/). [gameplan.md](gameplan.md) is the
+design and the constraints that govern it; **[ambient/README.md](ambient/README.md)
+is the living document** — current state, the measurements everything is tuned
+from, the gotchas, and what is still unverified. Read the README first, and
+treat it as authoritative wherever the two disagree.
 
 ## Environment
 

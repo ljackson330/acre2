@@ -1,149 +1,150 @@
-# ACRE2 Ambient Battle Sound — Implementation Spec (Process-Loopback Approach)
+# ACRE2 Ambient Battle Sound — Design
 
-Fork https://github.com/IDI-Systems/acre2 (GPLv3, Arma 3). Goal: get it
-working, not upstream-ready. Private/local fork, no need for clean
-rebase-ability against upstream `master`.
+Fork of https://github.com/IDI-Systems/acre2 (GPLv3, Arma 3). Goal: get it
+working, not upstream-ready. No need for clean rebase-ability against upstream
+`master`.
+
+This document is the **design and the constraints that govern it**. For current
+state, evidence, gotchas and how to pick the work back up, see
+[ambient/README.md](ambient/README.md) — that is the living document, and it is
+authoritative wherever the two disagree.
+
+> This file was originally written as a pre-implementation spec for a
+> Windows-only design. It was rewritten on 2026-09-16 to describe what was
+> actually built, which has two capture backends rather than one. The original
+> is in git history if the reasoning behind a decision is ever needed.
 
 ## Feature
+
 When a player transmits on an ACRE2 radio, capture their own Arma 3 process
-audio output live and mix it into the outgoing transmission, so listeners
-hear the transmitter's real combat environment (gunfire, explosions,
-engines) riding through the normal TS3 voice pipeline.
+audio live and mix it into the outgoing transmission, so listeners hear the
+transmitter's real combat environment — gunfire, explosions, engines — riding
+through the normal TS3 voice pipeline.
 
-## Mechanism
-Windows `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` via
-`ActivateAudioInterfaceAsync` (Windows 10 2004+/Build 19041+). Reference:
-Microsoft's `ApplicationLoopback` sample. Captures raw PCM output of a
-specific process by PID.
+## Hard requirement: capture the game process, never the output device
 
-**Hard requirement:** scope capture strictly to the local `Arma3.exe`
-process. Never full-device/system loopback — ACRE2's received-radio audio
-plays back through the TS3 client process (separate from Arma3.exe), so
-system-wide loopback risks capturing and re-transmitting radio audio this
-client is already receiving.
+Capture must be scoped to the local Arma process. **Never full-device or
+system-wide loopback.** ACRE2's received radio audio plays back through the
+TeamSpeak client process, so a device-wide capture would pick up audio this
+client is already receiving and re-transmit it, producing a feedback path.
 
-## Injection point (unchanged from prior research)
+Both backends satisfy this by construction rather than by filtering, and it has
+been verified empirically — capturing a process that renders nothing, while
+another process blares on the same device, yields the audio engine's dither
+floor and nothing else.
+
+## Mechanism — two backends behind one interface
+
+`IAmbientSource` is the seam, and the capture API is the only genuinely
+platform-specific part of the feature.
+
+- **`CAmbientWasapiSource`** — Windows. `ActivateAudioInterfaceAsync` with
+  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` (Windows 10 2004+, build
+  19041+), targeting Arma by PID. Runs in-process inside the TeamSpeak client.
+- **`CAmbientSocketSource`** — Linux under Wine. Proton does not implement
+  process loopback, so the plugin cannot capture for itself there. A native
+  helper (`ambient/ambient-helper.py`) captures Arma's PipeWire node and serves
+  it over a loopback socket, which the plugin reads with ordinary Winsock.
+
+Both deliver signed 16-bit mono at 48 kHz — the format TeamSpeak's capture
+callback expects — so **everything downstream of the interface is shared**: ring
+buffer, noise gate, mixing, dump, telemetry.
+
+Selection is automatic and **never blocks**. `start()` runs on the player's
+push-to-talk path, so a backend is chosen by trying WASAPI and letting the
+failure arrive on its own thread; the helper takes over permanently for that
+session. The visible cost is that the first transmission of a session carries no
+ambience, which is a far better trade than a stalled PTT.
+
+## Injection point
+
 - `extensions/src/ACRE2TS/TsCallbacks_sound.cpp` →
   `ts3plugin_onEditCapturedVoiceDataEvent`
-- Implementation: `extensions/src/ACRE2Core/SoundEngine.cpp` →
-  `CSoundEngine::onEditCapturedVoiceDataEvent` (currently near-stub). Sum
-  the capture ring buffer into the outgoing mic buffer here, pre-encode.
+- `extensions/src/ACRE2Core/SoundEngine.cpp` →
+  `CSoundEngine::onEditCapturedVoiceDataEvent`
 
-## Gating — no SQF layer needed
-Do NOT build an SQF detection addon or poll `acre_api_fnc_isBroadcasting`.
-Instead hook the extension's own internal transmit-state signals directly:
-- `extensions/src/ACRE2Core/startRadioSpeaking.h` → start capture thread
-- `extensions/src/ACRE2Core/stopRadioSpeaking.h` → stop + flush capture thread
+This is pre-encode, which is why the receive-side radio DSP applies to the
+ambience automatically, exactly as it does to voice.
 
-This is the single most important performance decision: capture only runs
-during actual transmission windows, which are few and short regardless of
-combat intensity elsewhere on the server.
+**`*edited |= 1` is load-bearing.** TeamSpeak silently discards modified samples
+without it, which presents as broken capture while the mix works perfectly.
 
-## Architecture requirements
-1. **Dedicated capture thread** reading the WASAPI loopback client, feeding
-   a thread-safe ring buffer. `onEditCapturedVoiceDataEvent` drains it
-   without blocking. Handle over/underrun, clean start/stop tied to the
-   hooks above, and Arma/TS3 disconnect edge cases explicitly.
-2. **Resampling/format conversion.** Arma's render output format (verify —
-   likely 48kHz float) will likely not match TS3's expected capture format.
-   Confirm and build a converter stage.
-3. **PID targeting.** Find the local `Arma3.exe`/`arma3_x64.exe` process.
-   Note: two-Arma-instance test setups (see Testing section) require
-   explicit disambiguation logic; normal single-instance play does not.
-4. **Noise gate.** Simple amplitude-threshold gate on the ring buffer,
-   applied before mixing — suppresses near-silent residue (distant
-   footsteps/rustling already attenuated by Arma's own 3D mix). Not a
-   content classifier — no attempt to distinguish sound types.
-5. **Non-diegetic content (music, UI) is handled by instructing the player
-   to zero those Arma audio-settings sliders**, not by post-capture
-   filtering. Verify in Phase 0 that zeroing actually silences the content
-   in the captured stream (not just attenuates it), and confirm exactly
-   which categories Arma's settings expose.
-6. **Own-gunfire dominance is expected and acceptable** — do not treat a
-   transmitter's own weapon audio dominating the mix as a bug.
+## Gating — no SQF layer
 
-## Build order
+Capture is hooked to the extension's own internal transmit-state signals rather
+than polling `acre_api_fnc_isBroadcasting` from an addon:
 
-**Phase 0 (do first, before any fork code):** Standalone C++ test program,
-separate from ACRE2, using `ActivateAudioInterfaceAsync` +
-`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` to capture local Arma3.exe
-output to a WAV file. Verify: music/UI sliders zeroed → actually silent in
-capture; gunfire/explosions/engines recognizable in a recorded AI firefight;
-note actual sample rate/format produced; assess whether the noise gate is
-even necessary from this recording. **This is the highest-uncertainty
-assumption in the whole design — stop and reassess if this doesn't sound
-usable, rather than proceeding to Phase 2.**
+- `extensions/src/ACRE2Core/startRadioSpeaking.h` → start capture
+- `extensions/src/ACRE2Core/stopRadioSpeaking.h` → stop and flush
 
-**Phase 1:** Confirm Windows SDK version supports the needed
-`AUDIOCLIENT_ACTIVATION_PARAMS` struct. Do a due-diligence check on
-BattlEye/EAC compatibility with process-loopback capture before proceeding
-— this hasn't been verified, only reasoned about as low-risk (sanctioned OS
-API, no memory read/write or code injection into Arma's process).
+This is the single most important performance decision: capture only runs during
+actual transmission windows, which are few and short regardless of how intense
+combat is elsewhere on the server.
 
-**Phase 2:** Port Phase 0 capture code into the extension as described
-under Architecture requirements above (thread + ring buffer, hooked to
-start/stopRadioSpeaking, PID targeting, resampling, noise gate). Verify via
-extension logs: correct start/stop alignment with transmit state, no
-crashes/leaks across repeated cycles, no buffer over/underrun under normal
-use.
+## Design constraints, and how each resolved
 
-**Phase 3:** Wire into `onEditCapturedVoiceDataEvent`. Test via:
-- **Tier A (solo):** enable TS3's built-in local mic-monitor/"Sound Check"
-  playback; confirm you hear the injected mix at the source while
-  transmitting.
-- **Tier B (two-client, full validation):** two Steam/Arma accounts + two
-  TS3 identities on one machine, both audio outputs audible. Instance A =
-  transmitter near AI combat; instance B = listener elsewhere in radio
-  range, out of earshot of the real gunfire. Confirm PID targeting isolates
-  instance A only.
+1. **Dedicated capture thread feeding a lock-free ring buffer**, drained without
+   blocking by the audio callback. Single-producer/single-consumer, no locks,
+   because blocking the audio path on a thread waiting for a socket or an audio
+   device risks audible glitches in the player's own voice. Bounded latency is
+   the consumer's job: it discards its own backlog rather than playing catch-up
+   through stale audio, since ambience that lags the speech it accompanies is
+   worse than no ambience.
+2. **Format conversion** — resolved to nothing. Both backends deliver 48 kHz
+   mono s16 directly. The Windows client accepts a caller-chosen format and the
+   Linux helper converts before the wire, so no resampler exists.
+3. **PID targeting.** Arma is found by executable name. Two-instance test setups
+   need explicit disambiguation and are warned about; normal play does not.
+4. **Amplitude noise gate**, applied before mixing — deliberately *not* a
+   content classifier. Suppresses the quiet bed (foliage, waves, footsteps) that
+   would otherwise sit under every transmission. −35 dBFS with a 200 ms hold;
+   the hold is not a refinement, without it combat produces audible chattering.
+5. **Non-diegetic content (music, UI) is handled by instructing the player to
+   zero those Arma sliders**, not by post-capture filtering. Verified: zeroing
+   silences completely rather than attenuating.
+6. **Own-gunfire dominance is expected and acceptable.** Not a bug. Heavy rain
+   passing the gate is the same principle — a real operator transmitting in a
+   rainstorm would sound like it.
 
-**Phase 4 (tuning):** Confirm own-gunfire dominance matches expectations;
-tune noise-gate threshold against real Tier B results; confirm
-receive-side radio DSP (`FilterRadio.cpp`/`RadioEffect.cpp` — bandpass
-750-4000Hz, noise, distortion, hard clip) is correctly applying to injected
-content once received (it should, automatically, given the injection
-point — confirm by ear).
+## Deferred — do not build without asking
 
-## Deferred, do not build yet
-- **Supersonic crack/near-miss audio** — out of scope entirely for now.
-- **Nearby direct-voice bleed** — follow-on after core capture is proven,
-  not part of Phases 0-4. If revisited: tap ACRE2's internal per-speaker
-  channel list (`extensions/src/ACRE2Core/updateSpeakingData.h`,
-  `Speaking` enum in `ACRE2Shared/Types.h`), filter for
-  `speakingType == direct` (never `radio`, to avoid feedback-loop risk),
-  apply a custom steep attenuation curve + short-term-energy loudness gate
-  so only shouting passes through. Flag to the user before building: this
-  broadcasts a real bystander's live mic audio without their knowledge;
-  confirm whether a minimum-duration gate (avoid single sharp real-world
-  noises leaking) is wanted before implementing.
-- **Ducking/AGC on the combined signal** — undecided; either build a
-  compression stage before the existing hard-clip in `FilterRadio.cpp`, or
-  accept the existing hard-clip/distortion behavior as-is (itself a
-  realistic cheap-radio-overload behavior). Ask before choosing if not
-  specified.
+- **Supersonic crack / near-miss audio.** Out of scope entirely.
+- **Nearby direct-voice bleed.** If revisited: tap ACRE2's per-speaker channel
+  list (`updateSpeakingData.h`, `Speaking` enum in `ACRE2Shared/Types.h`), filter
+  for `speakingType == direct` (never `radio`, to avoid a feedback loop), and
+  apply a steep attenuation curve plus a loudness gate so only shouting passes.
+  **Flag to the user before building:** this broadcasts a real bystander's live
+  microphone audio without their knowledge. Confirm whether a minimum-duration
+  gate is wanted, so single sharp real-world noises do not leak.
+- **Ducking / AGC on the combined signal.** Undecided. Either add a compression
+  stage before the existing hard clip in `FilterRadio.cpp`, or accept that clip
+  as realistic cheap-radio overload behaviour. Becomes relevant only if a real
+  listener reports the mix clipping unpleasantly.
 
-## If Phase 0 fails
-Do not attempt to patch this design into something else. A discrete
-fired-event/canned-sample architecture was separately researched and
-validated as feasible (different injection strategy: `"FiredNear"` event
-handler + weapon-category sample library + mixing-pool channels) but is a
-full alternative design, not an extension of this one. Flag to the user
-rather than improvising a hybrid.
+## Alternative design, if the current one had failed
+
+A discrete fired-event / canned-sample architecture was separately researched
+and validated as feasible: a `"FiredNear"` event handler, a weapon-category
+sample library, and mixing-pool channels. It is a **full alternative, not an
+extension** of this design. It was never needed — the go/no-go gate passed — but
+if the capture approach ever has to be abandoned, that is the fallback rather
+than a hybrid.
 
 ## Environment
-Windows required (extension has hard dependencies: `Wave.h` includes
-`<Windows.h>`; `FilterPosition.cpp` links XAudio2 — not portable to Linux
-without a real rewrite). Toolchain: HEMTT (SQF/PBO side, minimal use in
-this design), CMake + Visual Studio 2017+ + DirectX SDK (extension side).
-If working from Linux: build via GitHub Actions Windows runner or a
-throwaway cloud Windows instance; test via Arma 3 on Proton + TeamSpeak's
-**Windows** client under Wine (not native Linux TS3 client — it can't load
-a Windows-compiled plugin `.dll`). Verify stock ACRE2 works end-to-end
-under this setup, including mic capture, before trusting it as the dev
-loop; dual-boot Windows is the fallback if Wine audio capture proves
-unreliable.
+
+**Development and play is Linux**, which upstream does not support. Arma and
+TeamSpeak both run under Proton in Arma's own prefix. The plugin cross-compiles
+with mingw-w64; upstream's MSVC path is preserved and checked by CI.
+
+**The target is Windows**, where the WASAPI backend is the one that runs. It
+cannot execute under Proton or on CI runners (no audio endpoint), so a local
+Windows VM exists for it. See `ambient/README.md`.
 
 ## Distribution
-Any distributed build (even friends-only) triggers GPLv3 source-
-availability — be prepared to share source alongside any build handed out.
-No obligation to publish publicly for private testing.
+
+Any distributed build, even friends-only, triggers GPLv3 source availability.
+The fork is public, so pointing at the repository satisfies this.
+
+Note that ACRE2 imports `X3DAudio1_7.dll` from the legacy DirectX runtime —
+stock upstream does too, so anyone already running ACRE2 has it, but a clean
+machine reports only "Failed to load plugin" with no indication why.
