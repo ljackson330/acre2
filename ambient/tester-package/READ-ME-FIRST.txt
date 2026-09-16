@@ -1,0 +1,127 @@
+ACRE2 ambient battle sound — test build
+=======================================
+
+What this does
+--------------
+A modified ACRE2 TeamSpeak plugin. When you transmit on an ACRE2 radio, it
+captures your own Arma 3 audio and mixes it into what you're sending, so
+listeners hear the gunfire and explosions around you riding under your voice.
+
+It only captures Arma 3's own process, never your speakers or your microphone
+mix, so nothing else you have playing can leak into the radio.
+
+This is a private test build. It is not official ACRE2 and not signed by the
+ACRE2 team. Source: https://github.com/ljackson330/acre2 (branch
+ambient-battle-sound). It's GPLv3, same as ACRE2 itself.
+
+
+Before you start
+----------------
+- Your ACRE2 must be version 2.14.0.1064. Check in-game or in the Workshop
+  item; if yours is newer, stop and tell me, the plugin won't match.
+- You need TeamSpeak 3 (not TeamSpeak 5/6) and the 64-bit client.
+- Back up your existing plugin first — step 2 tells you where.
+
+
+Step 1 — pre-flight, 30 seconds
+-------------------------------
+Start Arma 3 and get to the main menu, so it's making some noise.
+
+Then run ambient-probe.exe from a terminal. It records 20 seconds of Arma's
+audio and tells you what it found:
+
+    ambient-probe.exe
+
+You want to see:
+
+    OK: activated. negotiated format: 48000 Hz, 1 ch, 16-bit
+    ...
+    peak : -XX.X dBFS
+
+If it says FAIL, stop here and send me the output. That's the whole point of
+this step — it tells us whether capture works at all without you having to
+install anything or get in-game.
+
+It writes ambient-probe.wav next to itself. Send me that too.
+
+
+Step 2 — install the plugin
+---------------------------
+IMPORTANT: it has to go in BOTH places, or Arma will silently put the old one
+back next time you launch.
+
+  a) Your TeamSpeak plugins folder:
+       %APPDATA%\TS3Client\plugins\
+     Rename the existing acre2_win64.dll to acre2_win64.dll.backup first.
+     Copy acre2_win64.dll from this folder in.
+
+  b) Your @acre2 mod folder, in the "plugin" subfolder:
+       ...\steamapps\workshop\content\107410\<id>\plugin\
+     (or wherever you have @acre2). Same thing: back up the existing
+     acre2_win64.dll, copy this one in.
+
+If you only do (a), ACRE2 copies the mod folder's copy over it on the next Arma
+launch and you'll be testing stock ACRE2 without realising.
+
+Restart TeamSpeak completely after copying.
+
+
+Step 3 — confirm it's live
+--------------------------
+Find your acre2.ini:
+
+    %APPDATA%\TS3Client\acre\acre2.ini
+
+Add this line at the end:
+
+    ambientSelfTest = true;
+
+Restart TeamSpeak. Start Arma and let it make noise. Then check:
+
+    %LOCALAPPDATA%\Arma 3\acre2_plugin.log
+
+You want a line like:
+
+    AMBIENT SELFTEST: OK -- backend 'WASAPI process loopback', 383040 samples...
+
+If you see "FAILED", send me that log. Once you've seen OK, you can remove the
+ambientSelfTest line (it just adds an 8 second capture at startup).
+
+
+Important: this build is not tuned
+----------------------------------
+There is a DSP chain -- a microphone model and a compressor -- that tames the
+gunfire and keeps quieter background audio audible. It currently only runs on
+the Linux side of this project, so THIS build does not have it.
+
+What that means for you: gunfire will be noticeably louder and more dynamic
+than the version I have been listening to, and busy scenes may clip. That is
+known, and not what I need feedback on. What I need to know is whether the
+capture works at all on real Windows with real Arma.
+
+
+Step 4 — the actual test
+------------------------
+Get in game with me. Find some combat, key up, and talk normally. I'll tell you
+how it sounds from the other end.
+
+Things worth reporting:
+- Is my voice still clear, or is the ambience burying it?
+- Does the combat audio sound like combat, or like mush?
+- Anything weird when you start/stop transmitting?
+
+
+To undo all of this
+-------------------
+Put your backed-up acre2_win64.dll back in both folders and restart TeamSpeak.
+Remove the ambientSelfTest line from acre2.ini. Nothing else was changed.
+
+
+Known things
+------------
+- If TeamSpeak says "Failed to load plugin", you're missing the DirectX
+  runtime. Unlikely if ACRE2 already works for you, since stock ACRE2 needs it
+  too. Installing the DirectX End-User Runtime fixes it.
+- The very first transmission after starting TeamSpeak may have no ambience.
+  That's deliberate — it's how the plugin works out which capture method to
+  use without delaying your push-to-talk. From the second key-up on it's normal.

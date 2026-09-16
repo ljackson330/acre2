@@ -28,9 +28,12 @@ the plugin over a loopback socket.
 ## Build
 
 ```
-./ambient/build-mingw.sh            # build acre2_win64.dll
-./ambient/build-mingw.sh --install  # build and install
-./ambient/build-mingw.sh --status   # which build is live where
+./ambient/build-mingw.sh              # build acre2_win64.dll
+./ambient/build-mingw.sh --install    # build and install
+./ambient/build-mingw.sh --status     # which build is live where
+./ambient/build-mingw.sh --dev        # + development diagnostics; never ship
+./ambient/package-for-tester.sh       # zip for someone testing on Windows
+./ambient/run-tests.sh                # ring buffer + gate, ASan/UBSan/TSan
 ```
 
 Cross-compiles with mingw-w64; no MSVC or Windows machine needed. The script

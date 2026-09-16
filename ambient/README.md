@@ -260,9 +260,11 @@ change. When a dump path is picked up, capture start logs
 `AMBIENT: dumping outgoing stream to <path>`; the absence of that line means
 the setting was not loaded.
 
-`ambientVolume` is the one to try first. It started at 0.5, reasoned from the
-Phase 0 levels (combat at −23.7 dBFS RMS), and is now 0.26 — still a starting
-point rather than a measured optimum, which needs a real listener.
+`ambientVolume` started at 0.5, reasoned from the Phase 0 levels (combat at
+−23.7 dBFS RMS), and is now 0.26. It is no longer the knob to reach for first:
+once the DSP chain landed, the helper's `--makeup` became the level control,
+because the compressor holds the peaks and makeup lifts the quiet bed without
+the gunfire returning. See the DSP section.
 
 ## Gate implementation verified against the Phase 0 takes
 
@@ -739,8 +741,9 @@ those recordings contain no voice at all.
    `ambientDumpFile` is empty unless the tester is meant to be recording.
 3. `ambientSelfTest` is genuinely meant to ship — it is how a tester answers
    "does capture work at all" without getting in-game. Leave it.
-4. Rebuild `~/acre2-ambient-test.zip` from that clean build, since the existing
-   one is only as current as the last time it was made.
+4. `./ambient/package-for-tester.sh` — rebuilds `~/acre2-ambient-test.zip` from
+   the current build. It refuses outright if that build contains the split dump,
+   so the check does not depend on anyone remembering step 1.
 
 ## Reality check: how close is any of this to a real radio?
 
@@ -919,7 +922,9 @@ distribution, no BattlEye question, nothing for them to install or undo.
 
 This answers three of the four open questions:
 
-1. **Tune `ambientVolume`.** 0.35 now, reasoned rather than measured.
+1. **Confirm the level against a listener.** Tuned by ear here to
+   `ambientVolume = 0.26` with the helper at `--makeup 4`, but never checked
+   from the receiving end. Adjust with `--makeup` rather than `ambientVolume`.
 2. **Opus survival.** Gunfire may fare badly through *Opus Voice* at low
    quality. Raise the channel codec quality or try *Opus Music* before blaming
    the mix.
