@@ -409,21 +409,38 @@ because ACRE2 plays received radio through the TeamSpeak process and
 re-transmitting it would feed back. Tested directly: one process blaring, one
 process rendering nothing, captured seconds apart on the same device.
 
-| capture target | non-zero samples | peak |
-|---|---|---|
-| a process rendering **nothing**, while the other blares | **0.00%** (exact zero, 389,280 samples) | −inf |
-| the **blaring** process (positive control) | 91.55% | −10.0 dBFS |
+| capture target | non-zero | peak | gate open at −35 dBFS |
+|---|---|---|---|
+| a process rendering **nothing**, while the other blares | 22.95% | −90.3 dBFS | **0.0%** |
+| the same, with **nothing else rendering at all** | 22.95% | −90.3 dBFS | **0.0%** |
+| the **blaring** process (positive control) | 97.01% | −10.1 dBFS | 67% |
 
-The positive control is what makes the first row mean something: the same probe,
-same conditions, seconds apart, does capture audio when there is audio to
-capture. So the silence is isolation, not a broken capture.
+The middle row is the one that proves it. The silent capture is **bit-identical
+whether or not another process is blaring on the same device** — so the residue
+is not leakage, it is the audio engine's own floor.
+
+And it is precisely a dither floor: the entire 8 s capture contains exactly
+three distinct sample values, symmetrically distributed.
+
+```
+-1: 44665    0: 299952    1: 44663
+```
+
+That is ±1 LSB, 55 dB below the gate threshold, and the gate removes 100% of it.
+Leaked audio would show a spread of magnitudes, not three values.
+
+**An earlier run of this test reported exact digital zero, and that was an
+artifact of the code, not a better result.** The original `deliver()` converted
+int16 → float → int16 via `/32768` then `*32767`, and that round-trip truncated
+±1 to 0. Removing the dead conversion path made the capture faithful and
+exposed the floor that had been there all along.
 
 ### An idle target delivers silence, not nothing
 
 The silent capture still produced **811 buffers** over 8 s — process loopback
-emits silent packets rather than stopping. `deliver()` treats them as zeros
-rather than skipping them, which is what keeps the ambience in step with the
-speech it accompanies. That guess turned out to be the right one.
+emits packets rather than stopping. `deliver()` treats them as zeros rather than
+skipping them, which is what keeps the ambience in step with the speech it
+accompanies. That guess turned out to be the right one.
 
 ## Gotcha: audio is per-session, and SSH lands in session 0
 

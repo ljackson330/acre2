@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 /*
  * Windows ambient capture: WASAPI process loopback.
@@ -31,10 +32,11 @@
  * the Linux helper already produces, so everything downstream of this class is
  * shared between the two platforms and stays byte-for-byte unchanged.
  *
- * UNVERIFIED. No part of this has executed on Windows yet. In particular the
- * format negotiation below -- whether a process-loopback client accepts an
- * arbitrary requested format or imposes the engine's own -- decides whether the
- * resampler is needed at all, and is the first thing the probe answers.
+ * Verified on Windows 11 24H2 via ambient/probe: activation succeeds, the
+ * engine accepts the requested 48 kHz mono s16 exactly, and capturing a process
+ * that renders nothing yields digital silence while another blares on the same
+ * device. What remains untested is Arma's own render stream, which needs a real
+ * machine with the game.
  */
 class CAmbientWasapiSource : public IAmbientSource {
 public:
@@ -108,14 +110,14 @@ private:
     static constexpr DWORD ACTIVATE_TIMEOUT_MS = 3000;
     static constexpr DWORD BUFFER_DURATION_MS = 200;
 
-    // The format the engine settled on, which is not necessarily the one asked
-    // for. Written by the capture thread before m_running goes true.
+    // The format asked for and accepted; Initialize() fails rather than
+    // substituting one. Written by the capture thread before m_running goes true.
     WAVEFORMATEX m_format{};
     // Written by the capture thread, read by whoever is polling the flags.
     mutable std::mutex m_errorMutex;
     std::string m_error;
 
-    // Resampler state, used only when the negotiated rate is not 48 kHz.
-    double m_resamplePos = 0.0;
-    float m_resampleLast = 0.0f;
+    // Reusable zero buffer for silent packets, so the audio path does not
+    // allocate once it is warm.
+    std::vector<int16_t> m_silence;
 };

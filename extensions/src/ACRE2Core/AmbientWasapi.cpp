@@ -98,14 +98,6 @@ std::string hresultToString(HRESULT hr) {
     return std::string(buf);
 }
 
-// Clamp and convert one float sample, which is what the engine hands us when
-// it declines a PCM format and falls back to its own.
-inline int16_t floatToPcm(float v) {
-    if (v > 1.0f) v = 1.0f;
-    else if (v < -1.0f) v = -1.0f;
-    return static_cast<int16_t>(v * 32767.0f);
-}
-
 }  // namespace
 
 CAmbientWasapiSource::~CAmbientWasapiSource() {
@@ -218,8 +210,6 @@ bool CAmbientWasapiSource::startForPid(DWORD targetPid, SampleSink sink) {
     this->m_failed.store(false, std::memory_order_release);
     this->m_stopRequested.store(false, std::memory_order_release);
     this->m_bytesThisSession.store(0, std::memory_order_release);
-    this->m_resamplePos = 0.0;
-    this->m_resampleLast = 0.0f;
     this->m_format = WAVEFORMATEX{};
 
     this->m_thread = std::thread(&CAmbientWasapiSource::captureThread, this, targetPid);
@@ -435,77 +425,32 @@ void CAmbientWasapiSource::deliver(const BYTE *data, uint32_t frameCount, bool s
         return;
     }
 
-    const uint16_t channels = this->m_format.nChannels;
-    const uint16_t bits = this->m_format.wBitsPerSample;
-    const uint32_t rate = this->m_format.nSamplesPerSec;
-
-    // Downmix to mono first, in float, so the rate conversion below has one
-    // stream to work on regardless of what the engine handed us.
-    std::vector<float> mono(frameCount);
-
+    /*
+     * No conversion, by construction.
+     *
+     * Initialize() either accepts the 48 kHz mono s16 this class asks for or
+     * fails outright, and m_format is set from the request rather than queried
+     * back from the engine -- so anything arriving here is already exactly what
+     * the pipeline wants. Verified on Windows 11 24H2, where the engine
+     * accepted the requested format exactly.
+     *
+     * If a future change ever asks for a second format when the first is
+     * refused, this is where the downmix and rate conversion have to come back.
+     */
     if (silent || data == nullptr) {
-        // A silent packet carries no valid data and must be treated as zeros,
-        // not skipped -- skipping would shorten the stream and drift the mix
-        // out of step with the voice it accompanies.
-        std::fill(mono.begin(), mono.end(), 0.0f);
-    } else if (bits == 16) {
-        const int16_t *pcm = reinterpret_cast<const int16_t *>(data);
-        for (uint32_t frame = 0; frame < frameCount; ++frame) {
-            int32_t sum = 0;
-            for (uint16_t ch = 0; ch < channels; ++ch) {
-                sum += pcm[(frame * channels) + ch];
-            }
-            mono[frame] = (float)sum / (float)channels / 32768.0f;
+        // A silent packet carries no valid data and must be counted as zeros
+        // rather than skipped: skipping would shorten the stream and drift the
+        // ambience out of step with the speech it accompanies. Process loopback
+        // really does send these -- an idle target produced 811 buffers of
+        // silence over 8 s rather than going quiet.
+        if (this->m_silence.size() < frameCount) {
+            this->m_silence.assign(frameCount, 0);
         }
-    } else if (bits == 32) {
-        const float *flt = reinterpret_cast<const float *>(data);
-        for (uint32_t frame = 0; frame < frameCount; ++frame) {
-            float sum = 0.0f;
-            for (uint16_t ch = 0; ch < channels; ++ch) {
-                sum += flt[(frame * channels) + ch];
-            }
-            mono[frame] = sum / (float)channels;
-        }
-    } else {
-        return;  // unexpected width; dropping beats emitting noise
-    }
-
-    if (rate == TARGET_RATE) {
-        std::vector<int16_t> out(frameCount);
-        for (uint32_t i = 0; i < frameCount; ++i) {
-            out[i] = floatToPcm(mono[i]);
-        }
-        this->m_bytesThisSession.fetch_add(out.size() * sizeof(int16_t),
-                                           std::memory_order_relaxed);
-        this->m_sink(out.data(), out.size());
+        this->m_sink(this->m_silence.data(), frameCount);
         return;
     }
 
-    /*
-     * Linear interpolation. Crude, but the engine is expected to deliver 48 kHz
-     * directly and this path exists only so an unexpected rate degrades to
-     * slightly soft ambience rather than to silence or to pitch-shifted audio.
-     * If the probe shows this path actually gets used, replace it.
-     */
-    const double step = (double)rate / (double)TARGET_RATE;
-    std::vector<int16_t> out;
-    out.reserve((size_t)(frameCount / step) + 2);
-
-    double pos = this->m_resamplePos;
-    while (pos < (double)frameCount) {
-        const size_t index = (size_t)pos;
-        const double frac = pos - (double)index;
-        const float a = (index == 0) ? this->m_resampleLast : mono[index - 1];
-        const float b = mono[index];
-        out.push_back(floatToPcm(a + (float)frac * (b - a)));
-        pos += step;
-    }
-    this->m_resamplePos = pos - (double)frameCount;
-    this->m_resampleLast = mono[frameCount - 1];
-
-    if (!out.empty()) {
-        this->m_bytesThisSession.fetch_add(out.size() * sizeof(int16_t),
-                                           std::memory_order_relaxed);
-        this->m_sink(out.data(), out.size());
-    }
+    this->m_bytesThisSession.fetch_add(frameCount * sizeof(int16_t),
+                                       std::memory_order_relaxed);
+    this->m_sink(reinterpret_cast<const int16_t *>(data), frameCount);
 }
