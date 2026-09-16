@@ -121,6 +121,8 @@ class Compressor:
                  attack_ms=1.0, release_ms=40.0, knee_db=6.0, makeup_db=0.0):
         self.threshold_db = threshold_db
         self.ratio = ratio
+        self.attack_ms = attack_ms
+        self.release_ms = release_ms
         self.knee_db = knee_db
         self.makeup = 10.0 ** (makeup_db / 20.0)
         # One-pole coefficients. A gunshot needs a few ms to be caught without
@@ -199,7 +201,10 @@ class AmbientChain:
             bits.append("high-pass")
         if self.compressor is not None:
             c = self.compressor
-            bits.append(f"compressor {c.threshold_db:.0f}dB {c.ratio:.1f}:1")
+            bits.append(f"compressor {c.threshold_db:.0f}dB {c.ratio:.1f}:1 "
+                        f"a{c.attack_ms:g}ms r{c.release_ms:g}ms")
+            if c.makeup != 1.0:
+                bits.append(f"makeup {20*math.log10(c.makeup):+.1f}dB")
         if self.gain != 1.0:
             bits.append(f"gain {20*math.log10(self.gain):+.1f}dB")
         return ", ".join(bits) if bits else "passthrough"
