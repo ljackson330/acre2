@@ -64,6 +64,16 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
   when samples are modified or TeamSpeak discards them silently — it presents
   as broken capture while the mix works perfectly. Bit 2 arrives on input
   meaning "about to be sent". Stock ACRE2 never writes this parameter.
+- **The ambient DSP lives in `ambient-helper.py`, so it is Linux-only.** The
+  Windows WASAPI backend captures in-process and never touches the helper, which
+  means a Windows transmitter gets raw, untuned ambience. Porting the chain to
+  C++ is the obvious next code task, and would move the settled values into
+  `acre2.ini` rather than helper defaults.
+- **Reach for the helper's `--makeup` before `ambientVolume`.** The compressor
+  holds the peaks, so makeup lifts the quiet bed without the gunfire coming back.
+  Lowering `ambientVolume` pulls everything down equally and takes the bed out
+  first — which is the trap the compressor exists to avoid.
+
 - **The first key-up of a TeamSpeak session has no ambience, by design.** The
   backend probe resolves on that transmission; the fallback applies from the
   second onward. Selection deliberately never blocks, because `start()` runs on

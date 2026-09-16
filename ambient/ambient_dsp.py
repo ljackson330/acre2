@@ -66,6 +66,7 @@ RMS for no change in spread at all. Both stages are worth having; they are just
 solving different problems.
 """
 
+import argparse
 import math
 
 try:
@@ -213,8 +214,12 @@ class AmbientChain:
 def add_dsp_arguments(parser):
     """Shared CLI surface, so the helper and the offline preview cannot drift."""
     g = parser.add_argument_group("ambient DSP")
-    g.add_argument("--dsp", action="store_true",
-                   help="enable the ambient DSP chain (off by default)")
+    # On by default: these values were tuned against real recordings and are
+    # what the feature is supposed to sound like. --no-dsp is for A/B.
+    g.add_argument("--dsp", action="store_true", default=True,
+                   help=argparse.SUPPRESS)
+    g.add_argument("--no-dsp", dest="dsp", action="store_false",
+                   help="bypass the ambient DSP chain entirely (for A/B)")
     g.add_argument("--no-highpass", action="store_true",
                    help="skip the noise-cancelling mic model")
     g.add_argument("--no-compressor", action="store_true",
@@ -234,8 +239,11 @@ def add_dsp_arguments(parser):
                    help="release in ms; shorter is strictly better here, because "
                         "sustained fire never lets a long release recover and it "
                         "ends up ducking the bed too (default: 40)")
-    g.add_argument("--makeup", type=float, default=0.0,
-                   help="makeup gain in dB (default: 0 -- level belongs in acre2.ini)")
+    g.add_argument("--makeup", type=float, default=4.0,
+                   help="makeup gain in dB, applied flat after compression. This "
+                        "is the knob for overall ambience level day to day: the "
+                        "compressor holds the peaks, so raising it lifts the quiet "
+                        "bed without the gunfire coming back (default: 4)")
     g.add_argument("--gain", type=float, default=0.0,
                    help="extra gain in dB applied after everything (default: 0)")
     return parser

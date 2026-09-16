@@ -587,6 +587,49 @@ the way the plugin calls it". Beyond that:
 
 # Ambient-bus DSP — mic model and compressor
 
+**Settled configuration, 2026-09-16.** These are the defaults, so a bare
+`python3 ambient/ambient-helper.py` is the tuned chain:
+
+| stage | value | what it does |
+|---|---|---|
+| high-pass | 300 Hz, 12 dB/oct | noise-cancelling mic model; buys headroom |
+| compressor | −28 dBFS, 8:1 | squashes anything above the quiet bed |
+| attack / release | 1 ms / 40 ms | fast enough to catch gunfire, short enough to recover between shots |
+| makeup | **+4 dB** | flat lift after compression |
+| `ambientVolume` | **0.26** (acre2.ini) | independent overall level |
+
+`--no-dsp` bypasses the whole chain for A/B. Every parameter is a float, so
+tuning happens in 1 dB steps or smaller.
+
+**`--makeup` is the day-to-day level knob, not `ambientVolume`.** Because the
+compressor is holding the peaks, raising makeup lifts the quiet bed without the
+gunfire coming back with it. Lowering `ambientVolume` instead pulls everything
+down equally and takes the bed out first — which is the trap this whole stage
+exists to avoid.
+
+## How it got to +4 dB
+
+Worth recording, because the first attempt went wrong in an instructive way.
+
+With the chain in and no makeup, the mix measured well — spread roughly halved
+on every take, and the `inbound` demo stopped clipping at 0.0 dBFS — but **the
+rotor wash in a Huey became inaudible**. The instinct was that the high-pass had
+eaten it, and that was wrong: measured band by band, the change was nearly
+uniform (−6.6 dB below 300 Hz, −8.0 at 750–1200, −6.9 at 3–4 kHz). No spectral
+tilt at all.
+
+The real cause was simpler. `FilterRadio` high-passes at 750 Hz on the receive
+side, so sub-750 rotor content was never reaching the listener in the first
+place — the 300 Hz filter cannot remove what the radio already removed. What
+actually happened is that the ambience lost about 7 dB against a voice that did
+not change, and the rotor bed had been sitting just above audibility. Compression
+plus a flat 25% cut were pulling in the same direction, and the quietest thing in
+the mix went first.
+
+Makeup gain is the fix for exactly that: squash the peaks, then lift everything.
++6 dB put the bed 3.7 dB *above* where it started while leaving the gunfire
+5.8 dB below. +4 dB is where it landed after that turned out slightly hot.
+
 `ambient/ambient_dsp.py` implements two stages that belong on the **ambience
 only**, never the summed signal. They live in the helper rather than the plugin
 for exactly that reason — the helper carries Arma's audio and nothing else — and
@@ -648,6 +691,29 @@ the bed while still taking 7 dB off the loud events.
 
 Realism is a good source of ideas here and a bad source of final values.
 
+## The DSP is Linux-only, and that matters for the friend test
+
+The chain lives in `ambient-helper.py`, which **only the Linux backend uses**.
+`CAmbientWasapiSource` captures in-process and never touches the helper, so a
+Windows transmitter currently gets **raw, untuned ambience** — no mic model, no
+compressor, no makeup, and `ambientVolume` alone doing the work.
+
+Consequences, in order of how likely they are to bite:
+
+- **Test A is unaffected.** You transmit from Linux, so everything above
+  applies. Tuning results from that session are real.
+- **Test B would not sound like this.** A friend running the package as the
+  transmitter would hear the pre-DSP behaviour: gunfire 6 dB hotter, clipping at
+  0.0 dBFS on busy scenes, and the wide dynamic range that motivated all of
+  this. Worth saying to them up front, or the feedback will be about a version
+  that no longer exists here.
+- **Porting it is the obvious next code task.** `AmbientGate` and
+  `AmbientRingBuffer` are already shared C++; the chain is a biquad and a
+  compressor, neither of which is hard to write twice. The parameters are
+  settled and measured, so it is a transcription job rather than a design one.
+  It would also let the values move into `acre2.ini` instead of living as
+  helper command-line defaults.
+
 # Picking this up again
 
 *Current as of 2026-09-16.*
@@ -672,6 +738,10 @@ python3 ambient/ambient-helper.py     # leave running, or nothing captures
 ./ambient/run-tests.sh                # ring buffer + gate, under ASan/UBSan/TSan
 ```
 
+The helper applies the tuned DSP chain by default now — no flags needed, and
+the line it logs at startup states the whole chain, so if it does not mention
+the compressor and makeup you are not running what you think you are.
+
 Then launch Arma + TeamSpeak via `~/Arma3Helper.sh`. **Restart TeamSpeak after
 any `acre2.ini` change** — it is read once at plugin start.
 
@@ -680,11 +750,15 @@ any `acre2.ini` change** — it is read once at plugin start.
 The working demo configuration is:
 
 ```
-ambientVolume = 0.35;
+ambientVolume = 0.26;
 ambientGateThreshold = -35;
 ambientDumpFile = Z:\home\liam\acre2_demo.wav
 ambientDumpSignalQuality = 0.9;
 ```
+
+Reach for `--makeup` on the helper before `ambientVolume` when the level is
+wrong -- the compressor is holding the peaks, so makeup lifts the quiet bed
+without the gunfire returning. See the DSP section.
 
 Healthy log lines (`%LOCALAPPDATA%\Arma 3\acre2_plugin.log`, i.e. inside the
 prefix) during a transmission:
