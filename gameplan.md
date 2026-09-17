@@ -66,6 +66,14 @@ ambience, which is a far better trade than a stalled PTT.
 This is pre-encode, which is why the receive-side radio DSP applies to the
 ambience automatically, exactly as it does to voice.
 
+It also means **the ambience reaches proximity chat**: one TeamSpeak stream
+carries voice and ambience together, and every receiver feeds it into the
+speaker's direct channel as well as their radio channels, so bystanders off the
+net hear it too. That is a property of mixing at the transmitter, not a bug in
+the mix, and no fix exists that does not put code on the receiving end. See the
+open question in `ambient/README.md` for the delay budget and the three
+candidate architectures; it is gated on measuring the effect in Test A.
+
 **`*edited |= 1` is load-bearing.** TeamSpeak silently discards modified samples
 without it, which presents as broken capture while the mix works perfectly.
 

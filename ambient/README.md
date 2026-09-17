@@ -908,6 +908,87 @@ number that would actually matter; it has been zero in every test.
 | ring buffer and gate are race-free | ThreadSanitizer in CI, 3307 checks |
 | the plugin loads and initialises in real Windows TeamSpeak | VM, with DirectX runtime present |
 
+## Open question: the ambience also reaches proximity chat
+
+Found by reading the code on 2026-09-17, not by testing. **Anyone within direct
+speech range of a transmitter hears the ambience, whether or not they are on the
+net.**
+
+TeamSpeak carries one voice stream per client, and the mix happens pre-encode,
+so ambience and voice are inseparable by the time anyone receives them. Each
+receiving client then feeds that one stream into *every* channel it holds for
+that speaker (`SoundEngine.cpp`, `onEditPlaybackVoiceDataEvent`):
+
+- **channels 1+** — radio, only for those who can hear the transmission;
+- **channel 0** — direct speech, positioned at the speaker, kept alive for
+  anyone in range even while they are transmitting (`fnc_speaking.sqf`), because
+  people standing next to you really do hear you talking into a handset.
+
+Channel 0 is the leak, and it is inherent to mixing at the transmitter. It is
+**not** the deferred "nearby direct-voice bleed" item, which is a different
+feature (bystanders' microphones, a privacy question). The hard requirement
+still holds: there is no feedback loop, because a bystander who transmits
+captures only their own Arma process.
+
+### How audible? Unmeasured, and the delay partly cancels
+
+What matters is not how late the TeamSpeak copy is, but how far it trails the
+copy the bystander's own game already played. Both are delayed:
+
+| path | rough budget |
+|---|---|
+| capture (WASAPI period, or PipeWire quantum + helper + socket) | 10–40 ms |
+| ring backlog (capped at 100 ms, typical value unknown) | 0–100 ms |
+| TeamSpeak frame + network + receiver jitter buffer | 90–200 ms |
+| **TeamSpeak copy, total** | **~100–250 ms** |
+| Arma replication of the shot to the bystander | 50–150 ms |
+| Arma speed-of-sound, ~3 ms/m (ACRE direct speech has **none** — `X3DAudioCalculate` is called with `MATRIX \| EMITTER_ANGLE` only, no `CALCULATE_DELAY`, no Doppler) | 0–150 ms |
+
+So the echo may trail the in-game sound by roughly 0–150 ms, and for a distant
+bystander could arrive **first**. Working in its favour: it is far quieter
+(`ambientVolume`, the compressor, distance attenuation), and a quieter lagging
+copy tends to be perceptually fused with the louder original. Working against:
+gunfire is impulsive, and impulsive sounds separate into audible echoes at much
+shorter delays than speech. And "they already heard it" is only partly true —
+first-person weapon samples, vehicle interiors and ear-ringing are things the
+bystander never hears, so masking does not help there.
+
+**Measure it in Test A before designing anything.** If it is inaudible, the
+current architecture stays and everything below is moot.
+
+### If it does need fixing, the design space is small
+
+The discriminator is **whether every listener will run the fork**, because every
+fix needs code on the receiving end. If listeners may be on stock ACRE2, design
+A is the only one that works at all.
+
+- **A — mix at the transmitter (today).** Stock listeners work, nothing to
+  install, drop-in for players. Bleeds to proximity; one ambience treatment for
+  everyone.
+- **B — send ambience separately, mix into radio channels at the receiver.**
+  The real fix. Transport has to be TeamSpeak plugin commands: Arma's network
+  cannot carry ~16 kbps of continuous audio per transmitter, and a second
+  connection handler means ghost clients. So it costs vendoring libopus (nothing
+  in the tree encodes today), base64, ~200–300 ms batching, a per-speaker jitter
+  buffer, and a decision about whether to delay radio voice to match. **Gate it
+  on a flood-limit test first** — servers score plugin commands for anti-flood,
+  and roughly 4 commands/s of ~700 B per transmitter may not survive. A
+  throwaway build sending dummy commands answers that in an evening and can kill
+  the whole approach before any real work.
+- **C — synthesize ambience at the receiver from game events.** The documented
+  fallback in gameplan.md, for a gate that passed. Deletes both capture backends
+  and all platform-specific code, but gives up real captured audio, still needs
+  the fork on every listener, and adds a sample library with its licensing and
+  event-taxonomy work. Not a refinement of A or B; a different feature.
+
+**B buys less realism than it first appears.** `FilterRadio` already applies
+per-link `signalQuality`/`signalModel` at each receiver to voice and ambience
+together — arguably correct, since a real link degrades one combined signal. B's
+honest wins are three: no proximity bleed, per-listener volume and opt-out, and
+an ambience chain independent of the voice bus. The settled DSP values and the
+pending C++ port survive under both A and B; under B they become capture-side
+conditioning with per-link processing layered on top.
+
 ## What is left
 
 Everything remaining needs a second person. **There are two separate tests and
@@ -920,7 +1001,7 @@ pre-encode). The receive path is untouched stock ACRE2. So **you transmit from
 Linux and they listen on stock Workshop ACRE2** — no build to send, no GPLv3
 distribution, no BattlEye question, nothing for them to install or undo.
 
-This answers three of the four open questions:
+This answers four of the five open questions:
 
 1. **Confirm the level against a listener.** Tuned by ear here to
    `ambientVolume = 0.26` with the helper at `--makeup 4`, but never checked
@@ -931,6 +1012,14 @@ This answers three of the four open questions:
 3. **Receive-side radio DSP applying to ambience.** Expected automatically
    given the pre-encode injection point. `ambientDumpSignalQuality` simulates
    it locally but cannot prove it.
+
+4. **How loud the proximity bleed actually is.** Have them stand near you
+   *without* being on the net, and fire single shots while transmitting. They
+   record their desktop audio (OBS, Audacity — TeamSpeak and Arma share an
+   output device, so both land in one file), and the gap between each shot and
+   its TeamSpeak copy *is* the echo delay, measurable in the waveform. Do it at
+   ~5 m and ~30 m: distance changes the sign of the answer. See the open
+   question above; this is the gate on a large piece of possible work.
 
 Also worth confirming in the same session: **`onPluginCommandEvent`**, the only
 path touched by the mingw assembly replacement that solo testing cannot reach.
