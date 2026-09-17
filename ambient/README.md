@@ -981,6 +981,12 @@ A is the only one that works at all.
   the fork on every listener, and adds a sample library with its licensing and
   event-taxonomy work. Not a refinement of A or B; a different feature.
 
+There is a fourth option — leave TeamSpeak and fork a voice client — along with
+the asset-licensing research that makes a differently-named mod possible. Both
+live in [backend-rewrite-notes.md](backend-rewrite-notes.md), which also records
+that **all listeners running the fork is confirmed acceptable**, so designs B
+through D are all live.
+
 **B buys less realism than it first appears.** `FilterRadio` already applies
 per-link `signalQuality`/`signalModel` at each receiver to voice and ambience
 together — arguably correct, since a real link degrades one combined signal. B's

@@ -91,7 +91,9 @@ and `extern "C"` guards, `__int16`/`__int64` keywords, and `api_compat.asm`
   speaker's direct channel too, so bystanders off the net hear it. Inherent to
   mixing at the transmitter. Unmeasured — see the open question in
   `ambient/README.md` before proposing a fix; all of them need code on the
-  receiving end.
+  receiving end, which is confirmed acceptable —
+  `ambient/backend-rewrite-notes.md` has the options and the asset-licensing
+  research, including which folders are **not** GPLv3.
 - **The first key-up of a TeamSpeak session has no ambience, by design.** The
   backend probe resolves on that transmission; the fallback applies from the
   second onward. Selection deliberately never blocks, because `start()` runs on
